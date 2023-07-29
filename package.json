@@ -1,0 +1,31 @@
+{
+	"name": "lui-templates",
+	"version": "0.0.0",
+	"description": "transform html templates into lui components",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/l3p3/lui-templates"
+	},
+	"bugs": {
+		"url": "https://github.com/l3p3/lui-templates/issues"
+	},
+	"main": "./src/main.js",
+	"module": "./src/main.js",
+	"exports": {
+		".": "./src/main.js"
+	},
+	"type": "module",
+	"scripts": {
+		"test": "cd test && node basic.js"
+	},
+	"keywords": [
+		"lui",
+		"templates",
+		"liquid",
+		"framework",
+		"html",
+		"tiny"
+	],
+	"author": "L3P3 <dev@l3p3.de> (https://l3p3.de)",
+	"license": "Zlib"
+}
