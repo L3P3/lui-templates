@@ -97,7 +97,6 @@ function props_generate(entries, identation) {
 }
 
 function value_generate(value, identation) {
-	// TODO: implement
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
 	case VALUE_TYPE_FIELD: return value.data;
