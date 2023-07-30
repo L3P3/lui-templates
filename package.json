@@ -1,6 +1,6 @@
 {
 	"name": "lui-templates",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "transform html templates into lui components",
 	"repository": {
 		"type": "git",

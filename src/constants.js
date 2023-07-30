@@ -1,6 +1,7 @@
 export const NODE_TYPE_COMPONENT = 0;
 export const NODE_TYPE_ELEMENT = 1;
-export const NODE_TYPE_MAP = 2;
+export const NODE_TYPE_IF = 2;
+export const NODE_TYPE_MAP = 3;
 
 export const VALUE_TYPE_STATIC = 0;
 export const VALUE_TYPE_FIELD = 1;

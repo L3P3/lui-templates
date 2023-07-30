@@ -6,7 +6,8 @@ import {
 } from './constants.js';
 
 export function generate(name, parsed, lui_imports) {
-	const {inputs, transformations, effects} = parsed;
+	name = name_format(name);
+	const {effects, inputs, transformations} = parsed;
 	let {nodes} = parsed;
 
 	const body = [];
@@ -30,12 +31,10 @@ export function generate(name, parsed, lui_imports) {
 		body.push('return null;');
 	} else {
 		// TODO: implement
-		body.push('return [];');
+		body.push('return [null];');
 	}
 
-	return `function ${
-		name_generate(name)
-	}(${
+	return `function ${name}(${
 		inputs_generate(inputs)
 	}) {\n\t${
 		body.join('\n\n\t')
@@ -43,22 +42,26 @@ export function generate(name, parsed, lui_imports) {
 }
 
 /**
-	some-name -> SomeName
+	formats name for a component
+	@param {string} name some-name
+	@returns {string} SomeName
 */
-function name_generate(name) {
-	return (
+function name_format(name) {
+	name =
 		name.charAt(0).toUpperCase() +
 		name.slice(1).replace(
 			/-([a-z])/g,
 			(_, char) => char.toUpperCase()
-		)
-	);
+		);
+	assert_identifier(name);
+	return name;
 }
 
 function inputs_generate(inputs) {
 	if (inputs.length === 0) return '';
 
 	const declarations = inputs.map(input => {
+		assert_identifier(input.name);
 		if (input.fallback !== undefined) {
 			return `${input.name} = ${JSON.stringify(input.fallback)}`;
 		}
@@ -69,15 +72,19 @@ function inputs_generate(inputs) {
 }
 
 function descriptor_generate(node) {
+	if (node.tag.includes('[')) throw new SyntaxError(`Tag must not contain "[": ${node.tag}`);
 	const attributes = Object.entries(node.attrs)
 		.filter(entry => entry[1].type === VALUE_TYPE_STATIC)
 		.map(descriptor_attribute_generate)
 		.filter(Boolean);
 	if (attributes.length === 0) return node.tag;
+	const invalid = attributes.find(attribute => attribute.includes(']['));
+	if (invalid) throw new SyntaxError(`Static attributes must not contain "][": ${invalid}`);
 	return `${node.tag}[${attributes.sort().join('][')}]`;
 }
 
 function descriptor_attribute_generate([key, value]) {
+	assert_identifier(key);
 	if (value.data === false) return '';
 	if (value.data === true) return key;
 	return `${key}=${string_escape(value.data)}`;
@@ -92,17 +99,20 @@ function attrs_generate(entries, identation) {
 
 function props_generate(entries, identation) {
 	if (entries.length === 0) return '';
-	const assignments = entries.map(attr => `${attr[0]}: ${value_generate(attr[1], identation)}`);
+	for (const entry of entries) assert_identifier(entry[0]);
+	const assignments = entries.map(entry => `${entry[0]}: ${value_generate(entry[1], identation)}`);
 	return `, {${list_generate(assignments, identation)}}`;
 }
 
 function value_generate(value, identation) {
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
-	case VALUE_TYPE_FIELD: return value.data;
+	case VALUE_TYPE_FIELD:
+		assert_identifier(value.data);
+		return value.data;
 	case VALUE_TYPE_STRING_CONCAT: return string_concat_generate(value.data, identation);
 	}
-	return 'null';
+	throw new TypeError(`Unknown value type: ${value.type}`);
 }
 
 function string_concat_generate(data, identation) {
@@ -118,7 +128,9 @@ function string_concat_generate(data, identation) {
 		data.map(item => {
 			switch (item.type) {
 			case VALUE_TYPE_STATIC: return template_escape(item.data);
-			case VALUE_TYPE_FIELD: return `\${${item.data}}`;
+			case VALUE_TYPE_FIELD:
+				assert_identifier(item.data);
+				return `\${${item.data}}`;
 			}
 			return `\${\n\t${
 				'\t'.repeat(identation) +
@@ -144,6 +156,17 @@ function string_escape(string) {
 		.replaceAll('"', '\\"')
 		.replaceAll('\n', '\\n')
 	);
+}
+
+/**
+	Throws an error if the string is not a valid JavaScript identifier
+	@param {string} string
+	@throws {SyntaxError} if the string is not a valid JavaScript
+*/
+function assert_identifier(string) {
+	if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(string)) {
+		throw new SyntaxError(`Invalid identifier: ${string}`);
+	}
 }
 
 /**

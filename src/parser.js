@@ -14,7 +14,7 @@ export async function parse(path) {
 		try {
 			parser = (await import(`./parsers/${extension}.js`)).default;
 		} catch (e) {
-			throw new Error(`No parser found for ${extension}`);
+			throw new Error(`No parser found for extension: ${extension}`);
 		}
 
 		parsers.set(extension, parser);
