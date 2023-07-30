@@ -1,0 +1,40 @@
+{
+	"inputs": [
+		{
+			"name": "name",
+			"fallback": "unknown"
+		}
+	],
+	"transformations": [],
+	"effects": [],
+	"nodes": [
+		{
+			"type": 1,
+			"tag": "h1",
+			"attrs": {
+				"innerText": {
+					"type": 2,
+					"data": [
+						{
+							"type": 0,
+							"data": "Hello "
+						},
+						{
+							"type": 1,
+							"data": "name"
+						},
+						{
+							"type": 0,
+							"data": "!"
+						}
+					]
+				},
+				"title": {
+					"type": 0,
+					"data": "Just a test"
+				}
+			},
+			"children": []
+		}
+	]
+}

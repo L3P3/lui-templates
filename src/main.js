@@ -18,6 +18,8 @@ export default async function lui_templates(path, lui_name = 'lui') {
 
 	const all_parsed = await Promise.all(paths.map(parse));
 
+	// console.log('parsed', JSON.stringify(all_parsed, null, 2));
+
 	const lui_imports = new Set();
 	const result = [];
 
