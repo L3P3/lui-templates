@@ -1,5 +1,6 @@
 {
 	"$schema": "https://json-schema.org/draft-07/schema",
+	"$id": "https://l3p3.de/shr/schema/lui-templates.intermediary.json",
 	"$title": "Intermediary format for templates",
 	"$description": "All templates should be parsed into this format before being turned into a component. You can also pass a template.json directly, following this schema.",
 

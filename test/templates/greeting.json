@@ -1,5 +1,5 @@
 {
-	"$schema": "../../schema/intermediary.json",
+	"$schema": "https://l3p3.de/shr/schema/lui-templates.intermediary.json",
 	"inputs": [
 		{
 			"name": "name",
