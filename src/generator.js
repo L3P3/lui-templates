@@ -1,5 +1,8 @@
 import {
+	NODE_TYPE_COMPONENT,
 	NODE_TYPE_ELEMENT,
+	NODE_TYPE_IF,
+	NODE_TYPE_MAP,
 	VALUE_TYPE_FIELD,
 	VALUE_TYPE_STATIC,
 	VALUE_TYPE_STRING_CONCAT,
@@ -20,7 +23,7 @@ export function generate(name, parsed, lui_imports) {
 		body.push(`hook_dom("${
 			descriptor_generate(node)
 		}"${
-			attrs_generate(Object.entries(node.attrs), 1)
+			attrs_generate(Object.entries(node.props), 1)
 		});`);
 		nodes = node.children;
 	}
@@ -30,8 +33,9 @@ export function generate(name, parsed, lui_imports) {
 	if (nodes.length === 0) {
 		body.push('return null;');
 	} else {
-		// TODO: implement
-		body.push('return [null];');
+		body.push(`return [${
+			childs_generate(nodes, 1, lui_imports)
+		}];`);
 	}
 
 	return `function ${name}(${
@@ -73,7 +77,7 @@ function inputs_generate(inputs) {
 
 function descriptor_generate(node) {
 	if (node.tag.includes('[')) throw new SyntaxError(`Tag must not contain "[": ${node.tag}`);
-	const attributes = Object.entries(node.attrs)
+	const attributes = Object.entries(node.props)
 		.filter(entry => entry[1].type === VALUE_TYPE_STATIC)
 		.map(descriptor_attribute_generate)
 		.filter(Boolean);
@@ -115,6 +119,46 @@ function value_generate(value, identation) {
 	throw new TypeError(`Unknown value type: ${value.type}`);
 }
 
+function childs_generate(nodes, identation, lui_imports) {
+	return list_generate(
+		nodes.map(node => node_generate(node, identation, lui_imports)),
+		identation
+	);
+}
+
+function node_generate(node, identation, lui_imports) {
+	switch (node.type) {
+	case NODE_TYPE_COMPONENT:
+		assert_identifier(node.component);
+		lui_imports.add('node');
+		// TODO: import component if needed
+		return `node(${node.component})`;
+	case NODE_TYPE_ELEMENT:
+		lui_imports.add('node_dom');
+		return `node_dom("${
+			descriptor_generate(node)
+		}"${
+			attrs_generate(Object.entries(node.props), identation + 1)
+		}${
+			node.children.length === 0
+			?	''
+			:	`, [${childs_generate(node.children, identation + 1, lui_imports)}]`
+		})`;
+	case NODE_TYPE_IF:
+		return `${
+			value_generate(node.condition, identation)
+		} &&\n${
+			'\t'.repeat(identation + 1) +
+			node_generate(node.child, identation, lui_imports)
+		}`;
+	case NODE_TYPE_MAP:
+		assert_identifier(node.component);
+		lui_imports.add('node_map');
+		return `node_map(${node.component})`;
+	}
+	throw new TypeError(`Unknown node type: ${node.type}`);
+}
+
 function string_concat_generate(data, identation) {
 	identation++;
 	if (data.length === 2) {
@@ -132,8 +176,8 @@ function string_concat_generate(data, identation) {
 				assert_identifier(item.data);
 				return `\${${item.data}}`;
 			}
-			return `\${\n\t${
-				'\t'.repeat(identation) +
+			return `\${\n${
+				'\t'.repeat(identation + 1) +
 				value_generate(item, identation)
 			}\n${'\t'.repeat(identation)}}`;
 		}).join('')
@@ -172,7 +216,7 @@ function assert_identifier(string) {
 /**
 	if a list entry contains one of these characters, it must be put on its own line
 */
-const regexp_noinline = /[\n:{[]/;
+const regexp_noinline = /[\n:{[(]/;
 
 /**
 	formats an object/array content, braces/brackets not included

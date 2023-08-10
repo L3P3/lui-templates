@@ -1,0 +1,146 @@
+{
+	"$schema": "https://json-schema.org/draft-07/schema",
+	"$title": "Intermediary format for templates",
+	"$description": "All templates should be parsed into this format before being turned into a component. You can also pass a template.json directly, following this schema.",
+
+	"type": "object",
+	"properties": {
+		"inputs": {
+			"$description": "list of component prop definitions",
+			"type": "array",
+			"items": {"$ref": "#/$defs/input"}
+		},
+		"transformations": {
+			"$description": "list of transformations",
+			"type": "array",
+			"items": {"$ref": "#/$defs/transformation"}
+		},
+		"effects": {
+			"$description": "list of effects",
+			"type": "array",
+			"items": {"$ref": "#/$defs/effect"}
+		},
+		"nodes": {
+			"$description": "list of contained nodes",
+			"type": "array",
+			"items": {"$ref": "#/$defs/node"}
+		}
+	},
+	"required": ["inputs", "transformations", "effects", "nodes"],
+
+	"$defs": {
+		"value": {
+			"$description": "expression representing a runtime value",
+			"oneOf": [
+				{
+					"$description": "static value",
+					"type": "object",
+					"properties": {
+						"type": {"const": 0},
+						"data": {"type": ["string", "number", "boolean", "null"]}
+					},
+					"required": ["type", "data"]
+				},
+				{
+					"$description": "field reference",
+					"type": "object",
+					"properties": {
+						"type": {"const": 1},
+						"data": {"type": "string"}
+					},
+					"required": ["type", "data"]
+				},
+				{
+					"$description": "string concatenation",
+					"type": "object",
+					"properties": {
+						"type": {"const": 2},
+						"data": {
+							"type": "array",
+							"items": {"$ref": "#/$defs/value"}
+						}
+					},
+					"required": ["type", "data"]
+				}
+			]
+		},
+		"props": {
+			"$description": "map of arbitrary property keys and their assigned values",
+			"type": "object",
+			"additionalProperties": {"$ref": "#/$defs/value"}
+		},
+		"input": {
+			"$description": "component prop definition",
+			"type": "object",
+			"properties": {
+				"name": {"type": "string"},
+				"fallback": {"type": ["string", "number", "boolean", "null"]}
+			},
+			"required": ["name"]
+		},
+		"transformation": {
+			"$description": "transformation from a list of fields into a single field",
+			"type": "object",
+			"properties": {}
+		},
+		"effect": {
+			"$description": "effect to be run depending on field values",
+			"type": "object",
+			"properties": {}
+		},
+		"node": {
+			"$description": "node in the template tree",
+			"oneOf": [
+				{
+					"$description": "single component",
+					"type": "object",
+					"properties": {
+						"type": {"const": 0},
+						"component": {"type": "string"},
+						"props": {"$ref": "#/$defs/props"},
+						"children": {
+							"type": "array",
+							"items": {"$ref": "#/$defs/node"}
+						}
+					},
+					"required": ["type", "component", "props", "children"]
+				},
+				{
+					"$description": "html element",
+					"type": "object",
+					"properties": {
+						"type": {"const": 1},
+						"tag": {"type": "string"},
+						"props": {"$ref": "#/$defs/props"},
+						"children": {
+							"type": "array",
+							"items": {"$ref": "#/$defs/node"}
+						}
+					},
+					"required": ["type", "tag", "props", "children"]
+				},
+				{
+					"$description": "if statement",
+					"type": "object",
+					"properties": {
+						"type": {"const": 2},
+						"condition": {"$ref": "#/$defs/value"},
+						"child": {"$ref": "#/$defs/node"}
+					},
+					"required": ["type", "condition", "child"]
+				},
+				{
+					"$description": "map component",
+					"type": "object",
+					"properties": {
+						"type": {"const": 3},
+						"from": {"type": "string"},
+						"component": {"type": "string"},
+						"props": {"$ref": "#/$defs/props"}
+					},
+					"required": ["type", "from", "component", "props"]
+				}
+			]
+		}
+	}
+}

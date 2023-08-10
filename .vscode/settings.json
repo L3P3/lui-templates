@@ -1,0 +1,10 @@
+{
+	"json.schemas": [
+		{
+			"fileMatch": [
+				"/test/templates/*.json"
+			],
+			"url": "/schema/intermediary.json"
+		}
+	]
+}
