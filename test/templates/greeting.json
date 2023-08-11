@@ -11,7 +11,7 @@
 	"nodes": [
 		{
 			"type": 1,
-			"tag": "h1",
+			"tag": "div",
 			"props": {
 				"title": {
 					"type": 0,
@@ -20,50 +20,51 @@
 			},
 			"children": [
 				{
-					"type": 1,
-					"tag": "span",
-					"props": {
-						"innerText": {
-							"type": 2,
-							"data": [
-								{
-									"type": 0,
-									"data": "Hello "
-								},
-								{
-									"type": 1,
-									"data": "name"
-								},
-								{
-									"type": 0,
-									"data": "!"
-								}
-							]
-						}
+					"type": 2,
+					"condition": {
+						"type": 1,
+						"data": "name"
 					},
+					"child": {
+						"type": 1,
+						"tag": "h1",
+						"props": {
+							"innerText": {
+								"type": 2,
+								"data": [
+									{
+										"type": 0,
+										"data": "Hello "
+									},
+									{
+										"type": 1,
+										"data": "name"
+									},
+									{
+										"type": 0,
+										"data": "!"
+									}
+								]
+							}
+						},
+						"children": []
+					}
+				},
+				{
+					"type": 1,
+					"tag": "p",
+					"props": {},
 					"children": [
 						{
-							"type": 2,
-							"condition": {
-								"type": 1,
-								"data": "name"
+							"type": 0,
+							"component": "Link",
+							"props": {
+								"text": {
+									"type": 0,
+									"data": "Click me!"
+								}
 							},
-							"child": {
-								"type": 1,
-								"tag": "a",
-								"props": {
-									"href": {
-										"type": 2,
-										"data": [
-											{
-												"type": 0,
-												"data": "about:blank"
-											}
-										]
-									}
-								},
-								"children": []
-							}
+							"children": []
 						}
 					]
 				}

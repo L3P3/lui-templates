@@ -1,5 +1,7 @@
 import fs from 'fs/promises';
 
+import {name_format} from './generator.js';
+
 const parsers = new Map();
 
 export async function parse(path) {
@@ -21,7 +23,7 @@ export async function parse(path) {
 	}
 
 	return [
-		name,
+		name_format(name),
 		await parser(await src_promise, path),
 	];
 }

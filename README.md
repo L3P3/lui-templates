@@ -6,25 +6,24 @@ This tool lets you write lui components without writing JavaScript but via templ
 
 ## Supported formats
 
-Here are some templating languages I am thinking about supporting:
+Here are some templating languages I think about supporting:
 
-- [pug](https://pugjs.org/api/getting-started.html)
-- [Haml](https://haml.info/)
-- [Liquid](https://shopify.github.io/liquid/)
-- [Handlebars](https://handlebarsjs.com/)
-- [Knockout](https://knockoutjs.com/documentation/introduction.html)
-
-Probably, not every feature of these template languages will be supported.
+- [ ] [pug](https://pugjs.org/api/getting-started.html)
+- [ ] [Haml](https://haml.info/)
+- [ ] [Liquid](https://shopify.github.io/liquid/)
+- [ ] [Handlebars](https://handlebarsjs.com/)
+- [ ] [Knockout](https://knockoutjs.com/documentation/introduction.html)
+- [x] Raw JSON (as intermediary format, see test/templates/greeting.json)
 
 ## Example
 
-###  src/templates/Greeting.liquid
+###  `src/templates/Greeting.liquid`
 
 ```liquid
 <h1>Hello {{ name }}!</h1>
 ```
 
-### src/main.js
+### `src/main.js`
 
 ```js
 import { init, node } from 'lui';
@@ -38,7 +37,7 @@ init(() => {
 });
 ```
 
-### build.js
+### `build.js`
 
 ```js
 import lui_templates from 'lui-templates';
@@ -49,7 +48,7 @@ await fs.writeFile('src/generated/Greeting.js', code, 'utf8');
 await bundleApp('src/main.js'); // or whatever
 ```
 
-### src/generated/Greeting.js (generated)
+### `src/generated/Greeting.js` (generated)
 
 The generated component is looking like this:
 
@@ -79,15 +78,19 @@ Clone this repository, enter the directory and run:
 npm test
 ```
 
-## Interface of lui_templates(path[, lui_name])
+## Interface of `lui_templates(path[, {options}])`
 
-### path
+### `path`
 
 The template file to read. Can be in one of the [supported formats](#supported-formats), determined by its ending. If it is a directory, all contained templates will be read.
 
-### lui_name
+### option `lui_name`
 
 The name of the lui module to import from. Defaults to `lui`.
+
+### option `components_name`
+
+The name of the module to import unknown components from. Defaults to `./components.js`.
 
 ### return value
 
@@ -96,11 +99,3 @@ The returned ES module imports the needed methods and exports the component(s).
 For a single template file, the default export is the component.
 
 For a directory, each component is exported by its name.
-
-## Notice
-
-This is not working yet. 🚧
-
-And I should probably do this in Rust. 🦀
-
-And please do not expect clean code, I reinvented many wheels. 🙈

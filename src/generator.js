@@ -8,8 +8,7 @@ import {
 	VALUE_TYPE_STRING_CONCAT,
 } from './constants.js';
 
-export function generate(name, parsed, lui_imports) {
-	name = name_format(name);
+export function generate(name, parsed, lui_imports, component_imports) {
 	const {effects, inputs, transformations} = parsed;
 	let {nodes} = parsed;
 
@@ -34,7 +33,7 @@ export function generate(name, parsed, lui_imports) {
 		body.push('return null;');
 	} else {
 		body.push(`return [${
-			childs_generate(nodes, 1, lui_imports)
+			childs_generate(nodes, 1, lui_imports, component_imports)
 		}];`);
 	}
 
@@ -50,10 +49,12 @@ export function generate(name, parsed, lui_imports) {
 	@param {string} name some-name
 	@returns {string} SomeName
 */
-function name_format(name) {
+export function name_format(name) {
 	name =
 		name.charAt(0).toUpperCase() +
-		name.slice(1).replace(
+		name.slice(1)
+		.replaceAll(/[\s_]+/g, '-')
+		.replace(
 			/-([a-z])/g,
 			(_, char) => char.toUpperCase()
 		);
@@ -104,7 +105,15 @@ function attrs_generate(entries, identation) {
 function props_generate(entries, identation) {
 	if (entries.length === 0) return '';
 	for (const entry of entries) assert_identifier(entry[0]);
-	const assignments = entries.map(entry => `${entry[0]}: ${value_generate(entry[1], identation)}`);
+	const assignments = entries.map(entry => {
+		const key = entry[0];
+		const value = value_generate(entry[1], identation);
+		return (
+			key === value
+			?	key
+			:	`${entry[0]}: ${value}`
+		);
+	});
 	return `, {${list_generate(assignments, identation)}}`;
 }
 
@@ -119,42 +128,68 @@ function value_generate(value, identation) {
 	throw new TypeError(`Unknown value type: ${value.type}`);
 }
 
-function childs_generate(nodes, identation, lui_imports) {
+function childs_generate(nodes, identation, lui_imports, component_imports) {
 	return list_generate(
-		nodes.map(node => node_generate(node, identation, lui_imports)),
+		nodes.map(node => node_generate(node, identation, lui_imports, component_imports)),
 		identation
 	);
 }
 
-function node_generate(node, identation, lui_imports) {
+function node_generate(node, identation, lui_imports, component_imports) {
 	switch (node.type) {
 	case NODE_TYPE_COMPONENT:
 		assert_identifier(node.component);
 		lui_imports.add('node');
-		// TODO: import component if needed
-		return `node(${node.component})`;
-	case NODE_TYPE_ELEMENT:
-		lui_imports.add('node_dom');
-		return `node_dom("${
-			descriptor_generate(node)
-		}"${
-			attrs_generate(Object.entries(node.props), identation + 1)
+		component_imports.add(node.component);
+		const props = props_generate(Object.entries(node.props), identation + 1);
+		return `node(${
+			node.component
+		}${
+			props === '' && node.children.length > 0
+			?	', null'
+			:	props
 		}${
 			node.children.length === 0
 			?	''
-			:	`, [${childs_generate(node.children, identation + 1, lui_imports)}]`
+			:	`, [${
+					childs_generate(node.children, identation + 1, lui_imports, component_imports)
+				}]`
+		})`;
+	case NODE_TYPE_ELEMENT:
+		lui_imports.add('node_dom');
+		const attrs = attrs_generate(Object.entries(node.props), identation + 1);
+		return `node_dom("${
+			descriptor_generate(node)
+		}"${
+			attrs === '' && node.children.length > 0
+			?	', null'
+			:	attrs
+		}${
+			node.children.length === 0
+			?	''
+			:	`, [${
+					childs_generate(node.children, identation + 1, lui_imports, component_imports)
+				}]`
 		})`;
 	case NODE_TYPE_IF:
 		return `${
 			value_generate(node.condition, identation)
 		} &&\n${
 			'\t'.repeat(identation + 1) +
-			node_generate(node.child, identation, lui_imports)
+			node_generate(node.child, identation, lui_imports, component_imports)
 		}`;
 	case NODE_TYPE_MAP:
 		assert_identifier(node.component);
+		assert_identifier(node.from);
 		lui_imports.add('node_map');
-		return `node_map(${node.component})`;
+		component_imports.add(node.component);
+		return `node_map(${
+			node.component
+		}, ${
+			node.from
+		}${
+			props_generate(Object.entries(node.props), identation + 1)
+		})`;
 	}
 	throw new TypeError(`Unknown node type: ${node.type}`);
 }

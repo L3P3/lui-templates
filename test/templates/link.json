@@ -1,0 +1,31 @@
+{
+	"$schema": "https://l3p3.de/shr/schema/lui-templates.intermediary.json",
+	"inputs": [
+		{
+			"name": "href",
+			"fallback": "#"
+		},
+		{
+			"name": "text"
+		}
+	],
+	"transformations": [],
+	"effects": [],
+	"nodes": [
+		{
+			"type": 1,
+			"tag": "a",
+			"props": {
+				"href": {
+					"type": 1,
+					"data": "href"
+				},
+				"innerText": {
+					"type": 1,
+					"data": "text"
+				}
+			},
+			"children": []
+		}
+	]
+}

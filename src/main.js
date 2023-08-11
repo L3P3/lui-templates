@@ -19,7 +19,16 @@ const version = JSON.parse(
 	readFileSync(__dirname + '/../package.json', 'utf8')
 ).version;
 
-export default async function lui_templates(path, lui_name = 'lui') {
+const options_default = {
+	lui_name: 'lui',
+	components_name: './components.js',
+};
+
+export default async function lui_templates(path, options = {}) {
+	options = {
+		...options_default,
+		...options,
+	};
 	const is_directory = (await stat(path)).isDirectory();
 
 	const paths = is_directory
@@ -31,16 +40,27 @@ export default async function lui_templates(path, lui_name = 'lui') {
 	// console.log('parsed', JSON.stringify(all_parsed, null, 2));
 
 	const lui_imports = new Set();
+	const component_imports = new Set();
 	const result = [];
 
 	for (const [name, parsed] of all_parsed) {
-		const expression = generate(name, parsed, lui_imports);
+		const expression = generate(name, parsed, lui_imports, component_imports);
 
 		result.push(
 			'export ' +
 			(is_directory ? '' : 'default ') +
 			expression
 		);
+	}
+
+	// write component_imports to the top of the file
+	for (const [name] of all_parsed) {
+		component_imports.delete(name);
+	}
+	if (component_imports.size > 0) {
+		result.unshift(`import {${
+			list_generate([...component_imports], 0)
+		}} from ${JSON.stringify(components_name)};`);
 	}
 
 	// write lui_imports to the top of the file
