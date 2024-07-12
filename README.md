@@ -31,9 +31,9 @@ import { init, node } from 'lui';
 import Greeting from './generated/Greeting.js';
 
 init(() => {
-	return [null, [
+	return [
 		node(Greeting, { name: 'World' }),
-	]];
+	];
 });
 ```
 
