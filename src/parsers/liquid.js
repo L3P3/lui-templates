@@ -64,10 +64,11 @@ function parseElement(html, pos, inputs) {
 	const attrsString = tagMatch[2];
 	const tagEndPos = pos + tagMatch[0].length;
 	
-	// Parse attributes
+	// Parse attributes (supports both double and single quotes)
 	const props = {};
 	if (attrsString.trim()) {
-		const attrRegex = /([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"/g;
+		// Match attributes with double quotes or single quotes
+		const attrRegex = /([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*["']([^"']*)["']/g;
 		let attrMatch;
 		while ((attrMatch = attrRegex.exec(attrsString)) !== null) {
 			const attrName = attrMatch[1];
