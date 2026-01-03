@@ -131,7 +131,8 @@ function value_generate(value, identation) {
 function childs_generate(nodes, identation, lui_imports, component_imports) {
 	return list_generate(
 		nodes.map(node => node_generate(node, identation, lui_imports, component_imports)),
-		identation
+		identation,
+		false // don't sort children, preserve document order
 	);
 }
 
@@ -257,13 +258,15 @@ const regexp_noinline = /[\n:{[(]/;
 	formats an object/array content, braces/brackets not included
 	@param {string[]} entries
 	@param {number} identation
+	@param {boolean} sort - whether to sort entries (default: true)
 	@return {string}
 */
-export function list_generate(entries, identation) {
+export function list_generate(entries, identation, sort = true) {
 	switch (entries.length) {
 	case 0: return '';
 	case 1:	if (!regexp_noinline.test(entries[0])) return ` ${entries[0]} `;
 	}
 	identation = '\t'.repeat(identation);
-	return `\n\t${identation + entries.sort().join(',\n\t' + identation)},\n` + identation;
+	const orderedEntries = sort ? entries.sort() : entries;
+	return `\n\t${identation + orderedEntries.join(',\n\t' + identation)},\n` + identation;
 }

@@ -53,6 +53,31 @@ function parseNodes(html, inputs) {
 }
 
 /**
+ * Translate HTML attribute names to DOM property names
+ * @param {string} attrName - HTML attribute name
+ * @returns {string} - DOM property name
+ */
+function htmlAttrToDomProp(attrName) {
+	// Common HTML to DOM attribute mappings
+	const mappings = {
+		'class': 'className',
+		'for': 'htmlFor',
+		'tabindex': 'tabIndex',
+		'readonly': 'readOnly',
+		'maxlength': 'maxLength',
+		'cellspacing': 'cellSpacing',
+		'cellpadding': 'cellPadding',
+		'rowspan': 'rowSpan',
+		'colspan': 'colSpan',
+		'usemap': 'useMap',
+		'frameborder': 'frameBorder',
+		'contenteditable': 'contentEditable',
+	};
+	
+	return mappings[attrName.toLowerCase()] || attrName;
+}
+
+/**
  * Parse a single HTML element
  */
 function parseElement(html, pos, inputs) {
@@ -73,7 +98,9 @@ function parseElement(html, pos, inputs) {
 		while ((attrMatch = attrRegex.exec(attrsString)) !== null) {
 			const attrName = attrMatch[1];
 			const attrValue = attrMatch[2];
-			props[attrName] = parseValue(attrValue, inputs);
+			// Translate HTML attribute name to DOM property name
+			const propName = htmlAttrToDomProp(attrName);
+			props[propName] = parseValue(attrValue, inputs);
 		}
 	}
 	
