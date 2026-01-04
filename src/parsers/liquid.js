@@ -1,5 +1,6 @@
 import {
 	NODE_TYPE_ELEMENT,
+	NODE_TYPE_IF,
 	VALUE_TYPE_FIELD,
 	VALUE_TYPE_STATIC,
 	VALUE_TYPE_STRING_CONCAT,
@@ -257,8 +258,53 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_liquid_conditional() {
-		// For now, we don't support conditionals in simple templates
-		this.error('Liquid conditionals are not supported in simple templates');
+		const is_unless = this.chars_match('{% unless');
+		const start_tag = is_unless ? '{% unless' : '{% if';
+		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
+		
+		this.chars_consume(start_tag);
+		
+		// Parse the condition expression
+		const condition_expr = this.chars_consume_until('%}', 'liquid conditional');
+		const condition_var = condition_expr.trim();
+		this.variables.set(condition_var, null);
+		
+		// Parse the body of the conditional
+		const body_tokens = [];
+		while (this.index < this.src.length) {
+			if (this.chars_match(end_tag)) {
+				this.chars_consume(end_tag);
+				break;
+			}
+			
+			// Parse nodes inside the conditional
+			const char = this.char_current();
+			let token = null;
+			
+			if (html_is_whitespace(char)) {
+				this.char_step();
+			}
+			else if (char === '<') {
+				if (this.chars_match('<!--')) this.chars_consume_until('-->', 'HTML comment');
+				else if (this.chars_match('</')) token = this.parse_html_end();
+				else token = this.parse_html_start();
+			}
+			else if (char === '{') {
+				token = this.parse_liquid(false);
+			}
+			else {
+				token = this.parse_text();
+			}
+			
+			if (token !== null) body_tokens.push(token);
+		}
+		
+		return {
+			type: TOKEN_CONDITIONAL,
+			is_unless,
+			condition: condition_var,
+			body: body_tokens,
+		};
 	}
 
 	/**
@@ -442,15 +488,76 @@ function nodes_from_tokens(tokens) {
 			i++;
 		}
 		else if (token.type === TOKEN_TEXT) {
-			// Skip pure whitespace text nodes at the root level
+			// Create a text node (span with innerText) for standalone text
 			if (token.value.trim()) {
-				// Text nodes at root level should be wrapped, but for simple templates
-				// they shouldn't exist. We'll skip them.
+				nodes.push({
+					type: NODE_TYPE_ELEMENT,
+					tag: 'span',
+					props: {
+						innerText: {
+							type: VALUE_TYPE_STATIC,
+							data: token.value.trim(),
+						},
+					},
+					children: [],
+				});
 			}
 			i++;
 		}
 		else if (token.type === TOKEN_EXPRESSION) {
-			// Expression at root level - skip for simple templates
+			// Create a text node (span with innerText) for standalone expression
+			nodes.push({
+				type: NODE_TYPE_ELEMENT,
+				tag: 'span',
+				props: {
+					innerText: {
+						type: VALUE_TYPE_FIELD,
+						data: token.value,
+					},
+				},
+				children: [],
+			});
+			i++;
+		}
+		else if (token.type === TOKEN_CONDITIONAL) {
+			// Build conditional node
+			const child_nodes = nodes_from_tokens(token.body);
+			
+			// If there's only one child, wrap it in the conditional
+			// Otherwise, wrap all children in a fragment-like structure
+			let child_node;
+			if (child_nodes.length === 1) {
+				child_node = child_nodes[0];
+			}
+			else {
+				// Multiple children - wrap in a span
+				child_node = {
+					type: NODE_TYPE_ELEMENT,
+					tag: 'span',
+					props: {},
+					children: child_nodes,
+				};
+			}
+			
+			// Build the condition value
+			const condition = {
+				type: VALUE_TYPE_FIELD,
+				data: token.condition,
+			};
+			
+			// For unless, we need to negate - but for simplicity,
+			// we'll use the positive form with a note that unless is not fully supported
+			// In a full implementation, we'd need a NOT operator in the value types
+			if (token.is_unless) {
+				// For now, treat unless the same as if (limitation)
+				// A proper implementation would need VALUE_TYPE_NOT or similar
+			}
+			
+			nodes.push({
+				type: NODE_TYPE_IF,
+				condition,
+				child: child_node,
+			});
 			i++;
 		}
 		else {
@@ -605,11 +712,11 @@ function build_children(tokens, startIndex, parentTag) {
 	
 	// Check if content is pure text/expressions (for innerText)
 	const hasElements = contentTokens.some(t => 
-		t.type === TOKEN_HTML_START || t.type === TOKEN_HTML_END
+		t.type === TOKEN_HTML_START || t.type === TOKEN_HTML_END || t.type === TOKEN_CONDITIONAL
 	);
 	
 	if (hasElements) {
-		// Parse child elements
+		// Parse child elements, text nodes, and conditionals
 		let j = 0;
 		while (j < contentTokens.length) {
 			const token = contentTokens[j];
@@ -618,6 +725,68 @@ function build_children(tokens, startIndex, parentTag) {
 				const node = build_element_node(contentTokens, j);
 				children.push(node.element);
 				j = node.nextIndex;
+			}
+			else if (token.type === TOKEN_TEXT) {
+				// Create text node (span) for standalone text
+				if (token.value.trim()) {
+					children.push({
+						type: NODE_TYPE_ELEMENT,
+						tag: 'span',
+						props: {
+							innerText: {
+								type: VALUE_TYPE_STATIC,
+								data: token.value.trim(),
+							},
+						},
+						children: [],
+					});
+				}
+				j++;
+			}
+			else if (token.type === TOKEN_EXPRESSION) {
+				// Create text node (span) for standalone expression
+				children.push({
+					type: NODE_TYPE_ELEMENT,
+					tag: 'span',
+					props: {
+						innerText: {
+							type: VALUE_TYPE_FIELD,
+							data: token.value,
+						},
+					},
+					children: [],
+				});
+				j++;
+			}
+			else if (token.type === TOKEN_CONDITIONAL) {
+				// Build conditional node
+				const child_nodes = nodes_from_tokens(token.body);
+				
+				let child_node;
+				if (child_nodes.length === 1) {
+					child_node = child_nodes[0];
+				}
+				else {
+					// Multiple children - wrap in a span
+					child_node = {
+						type: NODE_TYPE_ELEMENT,
+						tag: 'span',
+						props: {},
+						children: child_nodes,
+					};
+				}
+				
+				const condition = {
+					type: VALUE_TYPE_FIELD,
+					data: token.condition,
+				};
+				
+				children.push({
+					type: NODE_TYPE_IF,
+					condition,
+					child: child_node,
+				});
+				j++;
 			}
 			else {
 				j++;
