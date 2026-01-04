@@ -49,6 +49,16 @@ export default async function parse_liquid(src, path) {
 	For clarity, no RegExp are used in this file and stuff related to html spec belongs to parser.js.
 */
 
+/**
+	Handles errors during of after tokenization.
+	@param {string} message
+	@param {Object} obj either the Tokenizer or a specific token
+*/
+function error(message, obj) {
+	console.error(`Syntax error in ${obj.path}:${obj.line}:${obj.column}: ${message}`);
+	process.exit(1);
+}
+
 class Tokenizer {
 	constructor(src, path) {
 		this.src = src;
@@ -128,8 +138,7 @@ class Tokenizer {
 		@param {string} message
 	*/
 	error(message) {
-		console.error(`Syntax error in ${this.path}:${this.line}:${this.column}: ${message}`);
-		process.exit(1);
+		error(message, this);
 	}
 
 	/**
@@ -165,10 +174,23 @@ class Tokenizer {
 	}
 
 	/**
+		Creates position info for a token.
+		@returns {Object} Position info with path, line, column
+	*/
+	token_position() {
+		return {
+			path: this.path,
+			line: this.line,
+			column: this.column,
+		};
+	}
+
+	/**
 		Parses a html start tag, including (dynamic) tag name and attributes.
 		@returns {Object} Token
 	*/
 	parse_html_start() {
+		const position = this.token_position();
 		this.chars_consume('<');
 		const tag_name = this.parse_tag_name();
 		const attributes = this.parse_attributes();
@@ -178,6 +200,7 @@ class Tokenizer {
 			type: TOKEN_HTML_START,
 			tag_name,
 			attributes,
+			...position,
 		};
 	}
 
@@ -186,6 +209,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_html_end() {
+		const position = this.token_position();
 		this.chars_consume('</');
 		const tag_name = this.parse_tag_name();
 		this.chars_consume('>');
@@ -193,6 +217,7 @@ class Tokenizer {
 		return {
 			type: TOKEN_HTML_END,
 			tag_name,
+			...position,
 		};
 	}
 
@@ -202,6 +227,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_liquid(must_yield) {
+		const position = this.token_position();
 		// TODO (low priority): allow and store - at begin or end of liquid tags in the token so later, the whitespace can be removed/added to surrounding text nodes
 		if (this.chars_match('{% comment')) {
 			this.chars_consume_until('endcomment %}', 'liquid comment');
@@ -215,6 +241,7 @@ class Tokenizer {
 			return {
 				type: TOKEN_EXPRESSION,
 				value: varName,
+				...position,
 			};
 		}
 		if (
@@ -237,6 +264,7 @@ class Tokenizer {
 		return {
 			type: TOKEN_TEXT,
 			value: '{',
+			...position,
 		};
 	}
 
@@ -258,6 +286,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_liquid_conditional() {
+		const position = this.token_position();
 		const is_unless = this.chars_match('{% unless');
 		const start_tag = is_unless ? '{% unless' : '{% if';
 		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
@@ -304,6 +333,7 @@ class Tokenizer {
 			is_unless,
 			condition: condition_var,
 			body: body_tokens,
+			...position,
 		};
 	}
 
@@ -321,6 +351,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_text() {
+		const position = this.token_position();
 		let text = '';
 		while (this.index < this.src.length) {
 			const char = this.char_current();
@@ -331,6 +362,7 @@ class Tokenizer {
 		return {
 			type: TOKEN_TEXT,
 			value: text,
+			...position,
 		};
 	}
 
@@ -364,6 +396,8 @@ class Tokenizer {
 			
 			const char = this.char_current();
 			if (char === '>' || char === '/') break;
+			
+			const position = this.token_position();
 			
 			// Parse attribute name
 			let name = '';
@@ -407,6 +441,7 @@ class Tokenizer {
 				type: TOKEN_ATTRIBUTE,
 				name: html_attr_to_dom(name),
 				value: value_tokens,
+				...position,
 			});
 		}
 		
@@ -421,6 +456,7 @@ class Tokenizer {
 	parse_attribute_value(quote) {
 		const tokens = [];
 		let text = '';
+		let text_position = this.token_position();
 		
 		while (this.index < this.src.length) {
 			const char = this.char_current();
@@ -433,11 +469,13 @@ class Tokenizer {
 					tokens.push({
 						type: TOKEN_TEXT,
 						value: text,
+						...text_position,
 					});
 					text = '';
 				}
 				
 				// Parse liquid expression
+				const expr_position = this.token_position();
 				this.chars_consume('{{');
 				const expression = this.chars_consume_until('}}', 'liquid expression');
 				const varName = expression.trim();
@@ -445,7 +483,9 @@ class Tokenizer {
 				tokens.push({
 					type: TOKEN_EXPRESSION,
 					value: varName,
+					...expr_position,
 				});
+				text_position = this.token_position();
 			}
 			else {
 				text += char;
@@ -458,6 +498,7 @@ class Tokenizer {
 			tokens.push({
 				type: TOKEN_TEXT,
 				value: text,
+				...text_position,
 			});
 		}
 		
@@ -484,8 +525,7 @@ function nodes_from_tokens(tokens) {
 		}
 		else if (token.type === TOKEN_HTML_END) {
 			// End tag without matching start - this shouldn't happen in well-formed HTML
-			// but we'll just skip it
-			i++;
+			error(`Unexpected closing tag </${token.tag_name}>`, token);
 		}
 		else if (token.type === TOKEN_TEXT) {
 			// Create a text node (span with innerText) for standalone text
@@ -725,6 +765,10 @@ function build_children(tokens, startIndex, parentTag) {
 				const node = build_element_node(contentTokens, j);
 				children.push(node.element);
 				j = node.nextIndex;
+			}
+			else if (token.type === TOKEN_HTML_END) {
+				// End tag without matching start inside parent
+				error(`Unexpected closing tag </${token.tag_name}>`, token);
 			}
 			else if (token.type === TOKEN_TEXT) {
 				// Create text node (span) for standalone text
