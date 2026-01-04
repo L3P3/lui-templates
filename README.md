@@ -10,7 +10,7 @@ Here are some templating languages I think about supporting:
 
 - [ ] [pug](https://pugjs.org/api/getting-started.html)
 - [ ] [Haml](https://haml.info/)
-- [ ] [Liquid](https://shopify.github.io/liquid/)
+- [x] [Liquid](https://shopify.github.io/liquid/) (proof of concept)
 - [ ] [Handlebars](https://handlebarsjs.com/)
 - [ ] [Knockout](https://knockoutjs.com/documentation/introduction.html)
 - [x] Raw JSON (as intermediary format, see test/templates/greeting.json)

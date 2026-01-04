@@ -27,3 +27,28 @@ export async function parse(path) {
 		await parser(await src_promise, path),
 	];
 }
+
+const html_attr_to_dom_map = new Map([
+	['class', 'className'],
+	['for', 'htmlFor'],
+	['tabindex', 'tabIndex'],
+	['readonly', 'readOnly'],
+	['maxlength', 'maxLength'],
+	['cellspacing', 'cellSpacing'],
+	['cellpadding', 'cellPadding'],
+	['rowspan', 'rowSpan'],
+	['colspan', 'colSpan'],
+	['usemap', 'useMap'],
+	['frameborder', 'frameBorder'],
+	['contenteditable', 'contentEditable'],
+]);
+export function html_attr_to_dom(attr) {
+	attr = attr.toLowerCase();
+	return html_attr_to_dom_map.get(attr) || attr;
+}
+
+const html_whitespaces = ' \n\r\t\f\v'.split('');
+export const html_is_whitespace = char => html_whitespaces.includes(char);
+
+const html_self_closing = 'img,input,br,hr'.split(',');
+export const html_is_self_closing = tag => html_self_closing.includes(tag);

@@ -1,253 +1,258 @@
+import { type } from 'os';
 import {
 	NODE_TYPE_ELEMENT,
 	VALUE_TYPE_FIELD,
 	VALUE_TYPE_STATIC,
 	VALUE_TYPE_STRING_CONCAT,
 } from '../constants.js';
+import {
+	html_attr_to_dom,
+	html_is_self_closing,
+	html_is_whitespace,
+} from '../parser.js';
 
-export default async function parseLiquid(src, path) {
-	const inputs = new Set();
-	const nodes = parseNodes(src.trim(), inputs);
-	
+const TOKEN_HTML_START = 0; // html start tag
+const TOKEN_HTML_END = 1; // html end tag
+const TOKEN_TEXT = 2; // static text
+const TOKEN_ATTRIBUTE = 3; // html attribute
+const TOKEN_EXPRESSION = 4; // (inline transformed) variable
+const TOKEN_CONDITIONAL = 5; // if/unless node
+const TOKEN_LOOP = 6; // for node
+const TOKEN_SCRIPT = 7; // liquid script node
+
+export default async function parse_liquid(src, path) {
+	const tokenizer = new Tokenizer(src, path);
+	const tokens = tokenizer.parse_nodes();
+	const nodes = nodes_from_tokens(tokens);
+
 	return {
-		inputs: Array.from(inputs).map(name => ({ name })),
-		transformations: [],
+		inputs: (
+			Array.from(tokenizer.variables)
+			// variables that are not assigned anywhere
+			.filter(([, value]) => value === null)
+			.map(([name]) => ({ name }))
+		),
+		// what variables are derived from other variables via transformations?
+		transformations: [],// TODO
+		// not used for now
 		effects: [],
 		nodes,
 	};
 }
 
 /**
- * Parse HTML nodes from a string
- */
-function parseNodes(html, inputs) {
-	const nodes = [];
-	let pos = 0;
-	
-	while (pos < html.length) {
-		// Skip whitespace
-		const wsMatch = html.slice(pos).match(/^[\s\n]+/);
-		if (wsMatch) {
-			pos += wsMatch[0].length;
-			if (pos >= html.length) break;
-		}
-		
-		// Check for opening tag
-		if (html[pos] === '<' && html[pos + 1] !== '/') {
-			const result = parseElement(html, pos, inputs);
-			if (result) {
-				nodes.push(result.node);
-				pos = result.pos;
-				continue;
-			}
-		}
-		
-		// If we have text that's not inside a tag, skip it
-		// (standalone text should be inside elements)
-		const nextTag = html.indexOf('<', pos);
-		if (nextTag === -1) break;
-		pos = nextTag;
+	To parse liquid, we first need to "tokenize" the input string into meaningful chunks.
+	Reason for this is that we can have computed values, if and unless at almost any place.
+	Our internal tree should consist of html start tags, html end tags, static text, html attributes, (inline transformed) variables, if nodes, loop nodes, and other liquid nodes.
+	Then, we can traverse this tree to optimize it and generate the final output.
+	Certain html elements are forbidden: script, style, link, noscript, etc.
+	For clarity, no RegExp are used in this file and stuff related to html spec belongs to parser.js.
+*/
+
+class Tokenizer {
+	constructor(src, path) {
+		this.src = src;
+		this.path = path;
+		this.index = 0;
+		this.line = 1;
+		this.column = 0;
+		this.nodes = [];
+		this.variables = new Map;
 	}
-	
-	return nodes;
+
+	/**
+		Returns the current character being processed.
+	*/
+	char_current() {
+		return this.src.charAt(this.index);
+	}
+
+	/**
+		Checks if the next characters match the given string.
+		@param {string} chars
+		@returns {boolean}
+	*/
+	chars_match(chars) {
+		return this.src.slice(this.index, this.index + chars.length) === chars;
+	}
+
+	/**
+		Steps to the next character.
+	*/
+	char_step() {
+		const char = this.char_current();
+		if (char == null) this.error('Unexpected end of input');
+		this.index++;
+		if (char === '\n') {
+			this.line++;
+			this.column = 0;
+		}
+		else this.column++;
+	}
+
+	/**
+		Steps over n characters.
+		@param {number} n
+	*/
+	chars_step(n) {
+		for (let i = 0; i < n; i++) {
+			this.char_step();
+		}
+	}
+
+	/**
+		Consumes the given characters from the input.
+		@param {string} chars
+	*/
+	chars_consume(chars) {
+		if (!this.chars_match(chars)) this.error(`Expected "${chars}"`);
+		this.chars_step(chars.length);
+	}
+
+	/**
+		Consumes characters until the given limit is reached.
+		@param {string} limit - The end delimiter
+		@param {string} desc - Description of the context
+	*/
+	chars_consume_until(limit, desc) {
+		const index_end = this.src.indexOf(limit, this.index);
+		if (index_end === -1) this.error(`Unclosed ${desc}`);
+		this.chars_step(index_end + limit.length - this.index);
+		return this.src.slice(this.index, index_end);
+	}
+
+	/**
+		Handles errors during tokenization.
+		@param {string} message
+	*/
+	error(message) {
+		console.error(`Syntax error in ${this.path}:${this.line}:${this.column}: ${message}`);
+		process.exit(1);
+	}
+
+	/**
+		Expects to be in either top level or inside a block.
+		@returns {Array} Array of Tokens
+	*/
+	parse_nodes() {
+		const tokens = [];
+
+		while (this.index < this.src.length) {
+			let token = null;
+
+			const char = this.char_current();
+			if (html_is_whitespace(char)) {
+				this.char_step();
+			}
+			else if (char === '<') {
+				if (this.chars_match('<!--')) this.chars_consume_until('-->', 'HTML comment');
+				else if (this.chars_match('</')) token = this.parse_html_end();
+				else token = this.parse_html_start();
+			}
+			else if (char === '{') {
+				token = this.parse_liquid(false);
+			}
+			else {
+				token = this.parse_text();
+			}
+
+			if (token !== null) tokens.push(token);
+		}
+
+		return tokens;
+	}
+
+	/**
+		Parses a html start tag, including (dynamic) tag name and attributes.
+		@returns {Object} Token
+	*/
+	parse_html_start() {
+		this.chars_consume('<');
+		const tag_name = this.parse_tag_name();
+		const attributes = this.parse_attributes();
+		this.chars_consume('>');
+
+		return {
+			type: TOKEN_HTML_START,
+			tag_name,
+			attributes,
+		};
+	}
+
+	/**
+		Parses a html end tag.
+		@returns {Object} Token
+	*/
+	parse_html_end() {
+		this.chars_consume('</');
+		const tag_name = this.parse_tag_name();
+		this.chars_consume('>');
+
+		return {
+			type: TOKEN_HTML_END,
+			tag_name,
+		};
+	}
+
+	/**
+		Parses a liquid block.
+		@param {boolean} must_yield - Whether the block must yield a (single) value
+		@returns {Object} Token
+	*/
+	parse_liquid(must_yield) {
+		// TODO (low priority): allow and store - at begin or end of liquid tags in the token so later, the whitespace can be removed/added to surrounding text nodes
+		if (this.chars_match('{% comment')) {
+			this.chars_consume_until('endcomment %}', 'liquid comment');
+			return null;
+		}
+		if (this.chars_match('{{')) {
+			this.chars_consume('{{');
+			const expression = this.chars_consume_until('}}', 'liquid expression');
+			return {
+				type: TOKEN_EXPRESSION,
+				value: expression.trim(),
+			};
+		}
+		if (
+			this.chars_match('{% if') ||
+			this.chars_match('{% unless')
+		) {
+			return this.parse_liquid_conditional();
+		}
+		if (this.chars_match('{% for')) {
+			// later, lists might be allowed inside html attributes too
+			if (must_yield) this.error('Unexpected liquid loop');
+			return this.parse_liquid_loop();
+		}
+		if (this.chars_match('{%')) {
+			if (must_yield) this.error('Unexpected liquid script');
+			return this.parse_liquid_script();
+		}
+		// this is not a liquid tag!
+		this.char_step();
+		return {
+			type: TOKEN_TEXT,
+			value: '{',
+		};
+	}
+
+	/**
+		Parses a liquid script tag.
+		Handles stuff like variable assignments inside liquid script tags to have transformed values, other stuff is not supported for now.
+		Returns nothing but defines the variables so that they can later be turned into transformations.
+	*/
+	parse_liquid_script() {
+		this.chars_consume('{%');
+		const content = this.chars_consume_until('%}', 'liquid script');
+		// find variable assignments and store the variables and their definitions
+	}
 }
 
 /**
- * Translate HTML attribute names to DOM property names
- * @param {string} attrName - HTML attribute name
- * @returns {string} - DOM property name
- */
-function htmlAttrToDomProp(attrName) {
-	// Common HTML to DOM attribute mappings
-	const mappings = {
-		'class': 'className',
-		'for': 'htmlFor',
-		'tabindex': 'tabIndex',
-		'readonly': 'readOnly',
-		'maxlength': 'maxLength',
-		'cellspacing': 'cellSpacing',
-		'cellpadding': 'cellPadding',
-		'rowspan': 'rowSpan',
-		'colspan': 'colSpan',
-		'usemap': 'useMap',
-		'frameborder': 'frameBorder',
-		'contenteditable': 'contentEditable',
-	};
-	
-	return mappings[attrName.toLowerCase()] || attrName;
-}
-
-/**
- * Parse a single HTML element
- */
-function parseElement(html, pos, inputs) {
-	// Match opening tag: <tagname attr="value" ...>
-	const tagMatch = html.slice(pos).match(/^<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^>]*)?)>/);
-	if (!tagMatch) return null;
-	
-	const tag = tagMatch[1];
-	const attrsString = tagMatch[2];
-	const tagEndPos = pos + tagMatch[0].length;
-	
-	// Parse attributes (supports both double and single quotes)
-	const props = {};
-	if (attrsString.trim()) {
-		// Match attributes with double quotes or single quotes
-		const attrRegex = /([a-zA-Z][a-zA-Z0-9-]*)\s*=\s*["']([^"']*)["']/g;
-		let attrMatch;
-		while ((attrMatch = attrRegex.exec(attrsString)) !== null) {
-			const attrName = attrMatch[1];
-			const attrValue = attrMatch[2];
-			// Translate HTML attribute name to DOM property name
-			const propName = htmlAttrToDomProp(attrName);
-			props[propName] = parseValue(attrValue, inputs);
-		}
-	}
-	
-	// Check for self-closing tags
-	const isSelfClosing = ['img', 'br', 'hr', 'input', 'meta', 'link'].includes(tag);
-	
-	// Parse children
-	const children = [];
-	let contentEnd = tagEndPos;
-	
-	if (!isSelfClosing) {
-		// Simple approach: find the closing tag by counting depth
-		const closingTag = `</${tag}>`;
-		let depth = 1;
-		let i = tagEndPos;
-		
-		while (i < html.length && depth > 0) {
-			// Check for closing tag
-			if (html.slice(i).startsWith(closingTag)) {
-				depth--;
-				if (depth === 0) {
-					contentEnd = i;
-					break;
-				}
-				i += closingTag.length;
-				continue;
-			}
-			
-			// Check for nested opening tag
-			const openMatch = html.slice(i).match(/^<([a-zA-Z][a-zA-Z0-9-]*)/);
-			if (openMatch && openMatch[1] === tag) {
-				depth++;
-			}
-			
-			i++;
-		}
-		
-		// Parse content between opening and closing tags
-		const content = html.slice(tagEndPos, contentEnd);
-		if (content.trim()) {
-			parseContent(content, children, inputs, props);
-		}
-		
-		// Move position past closing tag
-		contentEnd += closingTag.length;
-	}
-	
-	return {
-		node: {
-			type: NODE_TYPE_ELEMENT,
-			tag,
-			props,
-			children,
-		},
-		pos: contentEnd,
-	};
-}
-
-/**
- * Parse content (text and child elements) within an element
- */
-function parseContent(content, children, inputs, props) {
-	content = content.trim();
-	
-	// Check if content contains HTML tags
-	const hasHtmlTags = /<[a-zA-Z]/.test(content);
-	
-	if (!hasHtmlTags) {
-		// Pure text content - set as innerText property
-		const textValue = parseValue(content, inputs);
-		if (textValue) {
-			props.innerText = textValue;
-		}
-		return;
-	}
-	
-	// Mixed content - parse child elements
-	let pos = 0;
-	while (pos < content.length) {
-		// Skip whitespace
-		const wsMatch = content.slice(pos).match(/^[\s\n]+/);
-		if (wsMatch) {
-			pos += wsMatch[0].length;
-			if (pos >= content.length) break;
-		}
-		
-		// Check for element
-		if (content[pos] === '<' && content[pos + 1] !== '/') {
-			const result = parseElement(content, pos, inputs);
-			if (result) {
-				children.push(result.node);
-				pos = result.pos;
-				continue;
-			}
-		}
-		
-		// Move past any unrecognized content
-		const nextTag = content.indexOf('<', pos + 1);
-		if (nextTag === -1) break;
-		pos = nextTag;
-	}
-}
-
-/**
- * Parse a value that might contain Liquid variables
- */
-function parseValue(str, inputs) {
-	// Find all Liquid variable references {{ variable }}
-	const parts = [];
-	let lastIndex = 0;
-	const regex = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
-	let match;
-	
-	while ((match = regex.exec(str)) !== null) {
-		// Add static text before the variable
-		if (match.index > lastIndex) {
-			parts.push({
-				type: VALUE_TYPE_STATIC,
-				data: str.slice(lastIndex, match.index),
-			});
-		}
-		
-		// Add the variable reference
-		const varName = match[1];
-		inputs.add(varName);
-		parts.push({
-			type: VALUE_TYPE_FIELD,
-			data: varName,
-		});
-		
-		lastIndex = match.index + match[0].length;
-	}
-	
-	// Add remaining static text
-	if (lastIndex < str.length) {
-		parts.push({
-			type: VALUE_TYPE_STATIC,
-			data: str.slice(lastIndex),
-		});
-	}
-	
-	// Return appropriate value type
-	if (parts.length === 0) {
-		return { type: VALUE_TYPE_STATIC, data: '' };
-	} else if (parts.length === 1) {
-		return parts[0];
-	} else {
-		return { type: VALUE_TYPE_STRING_CONCAT, data: parts };
-	}
+	Converts an array of tokens into an optimized tree of nodes.
+	@param {Array} tokens - Array of tokens to convert
+	@returns {Array} Array of Nodes
+*/
+function nodes_from_tokens(tokens) {
+	// TODO
 }

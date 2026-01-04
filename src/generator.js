@@ -15,6 +15,7 @@ export function generate(name, parsed, lui_imports, component_imports) {
 	const body = [];
 
 	// TODO: transformations
+	// stuff like `const variable2 = variable1 + 1`
 
 	if (nodes.length === 1 && nodes[0].type === NODE_TYPE_ELEMENT) {
 		const [node] = nodes;
@@ -28,6 +29,7 @@ export function generate(name, parsed, lui_imports, component_imports) {
 	}
 
 	// TODO: effects
+	// stuff like when variable1 is updated, function doSomething is invoked
 
 	if (nodes.length === 0) {
 		body.push('return null;');
@@ -132,7 +134,7 @@ function childs_generate(nodes, identation, lui_imports, component_imports) {
 	return list_generate(
 		nodes.map(node => node_generate(node, identation, lui_imports, component_imports)),
 		identation,
-		false // don't sort children, preserve document order
+		true
 	);
 }
 
@@ -258,15 +260,15 @@ const regexp_noinline = /[\n:{[(]/;
 	formats an object/array content, braces/brackets not included
 	@param {string[]} entries
 	@param {number} identation
-	@param {boolean} sort - whether to sort entries (default: true)
+	@param {boolean} ordered
 	@return {string}
 */
-export function list_generate(entries, identation, sort = true) {
+export function list_generate(entries, identation, ordered = false) {
 	switch (entries.length) {
 	case 0: return '';
 	case 1:	if (!regexp_noinline.test(entries[0])) return ` ${entries[0]} `;
 	}
+	if (!ordered) entries.sort();
 	identation = '\t'.repeat(identation);
-	const orderedEntries = sort ? entries.sort() : entries;
-	return `\n\t${identation + orderedEntries.join(',\n\t' + identation)},\n` + identation;
+	return `\n\t${identation + entries.join(',\n\t' + identation)},\n` + identation;
 }
