@@ -512,10 +512,22 @@ class Tokenizer {
 	@returns {Array} Array of Nodes
 */
 function nodes_from_tokens(tokens) {
+	return build_nodes_from_tokens(tokens, 0, tokens.length).nodes;
+}
+
+/**
+	Helper function to build nodes from a token range.
+	This consolidates the logic for both root-level and nested parsing.
+	@param {Array} tokens - Array of all tokens
+	@param {number} startIndex - Starting index
+	@param {number} endIndex - Ending index (exclusive)
+	@returns {Object} Object with nodes array and nextIndex
+*/
+function build_nodes_from_tokens(tokens, startIndex, endIndex) {
 	const nodes = [];
-	let i = 0;
+	let i = startIndex;
 	
-	while (i < tokens.length) {
+	while (i < endIndex) {
 		const token = tokens[i];
 		
 		if (token.type === TOKEN_HTML_START) {
@@ -524,47 +536,34 @@ function nodes_from_tokens(tokens) {
 			i = node.nextIndex;
 		}
 		else if (token.type === TOKEN_HTML_END) {
-			// End tag without matching start - this shouldn't happen in well-formed HTML
+			// End tag without matching start
 			error(`Unexpected closing tag </${token.tag_name}>`, token);
 		}
-		else if (token.type === TOKEN_TEXT) {
-			// Create a text node (span with innerText) for standalone text
-			if (token.value.trim()) {
+		else if (token.type === TOKEN_TEXT || token.type === TOKEN_EXPRESSION) {
+			// Collect consecutive text and expression tokens to merge them
+			const textTokens = [];
+			while (i < endIndex && (tokens[i].type === TOKEN_TEXT || tokens[i].type === TOKEN_EXPRESSION)) {
+				textTokens.push(tokens[i]);
+				i++;
+			}
+			
+			// Build a single span with concatenated innerText
+			const innerTextValue = build_value_from_tokens(textTokens);
+			if (innerTextValue) {
 				nodes.push({
 					type: NODE_TYPE_ELEMENT,
 					tag: 'span',
 					props: {
-						innerText: {
-							type: VALUE_TYPE_STATIC,
-							data: token.value.trim(),
-						},
+						innerText: innerTextValue,
 					},
 					children: [],
 				});
 			}
-			i++;
-		}
-		else if (token.type === TOKEN_EXPRESSION) {
-			// Create a text node (span with innerText) for standalone expression
-			nodes.push({
-				type: NODE_TYPE_ELEMENT,
-				tag: 'span',
-				props: {
-					innerText: {
-						type: VALUE_TYPE_FIELD,
-						data: token.value,
-					},
-				},
-				children: [],
-			});
-			i++;
 		}
 		else if (token.type === TOKEN_CONDITIONAL) {
 			// Build conditional node
-			const child_nodes = nodes_from_tokens(token.body);
+			const child_nodes = build_nodes_from_tokens(token.body, 0, token.body.length).nodes;
 			
-			// If there's only one child, wrap it in the conditional
-			// Otherwise, wrap all children in a fragment-like structure
 			let child_node;
 			if (child_nodes.length === 1) {
 				child_node = child_nodes[0];
@@ -579,18 +578,20 @@ function nodes_from_tokens(tokens) {
 				};
 			}
 			
-			// Build the condition value
-			const condition = {
-				type: VALUE_TYPE_FIELD,
-				data: token.condition,
-			};
-			
-			// For unless, we need to negate - but for simplicity,
-			// we'll use the positive form with a note that unless is not fully supported
-			// In a full implementation, we'd need a NOT operator in the value types
+			// Build the condition value - handle unless by negating
+			let condition;
 			if (token.is_unless) {
-				// For now, treat unless the same as if (limitation)
-				// A proper implementation would need VALUE_TYPE_NOT or similar
+				// For unless, negate the condition with JavaScript
+				condition = {
+					type: VALUE_TYPE_FIELD,
+					data: `!(${token.condition})`,
+				};
+			}
+			else {
+				condition = {
+					type: VALUE_TYPE_FIELD,
+					data: token.condition,
+				};
 			}
 			
 			nodes.push({
@@ -605,7 +606,7 @@ function nodes_from_tokens(tokens) {
 		}
 	}
 	
-	return nodes;
+	return { nodes, nextIndex: i };
 }
 
 /**
@@ -756,86 +757,9 @@ function build_children(tokens, startIndex, parentTag) {
 	);
 	
 	if (hasElements) {
-		// Parse child elements, text nodes, and conditionals
-		let j = 0;
-		while (j < contentTokens.length) {
-			const token = contentTokens[j];
-			
-			if (token.type === TOKEN_HTML_START) {
-				const node = build_element_node(contentTokens, j);
-				children.push(node.element);
-				j = node.nextIndex;
-			}
-			else if (token.type === TOKEN_HTML_END) {
-				// End tag without matching start inside parent
-				error(`Unexpected closing tag </${token.tag_name}>`, token);
-			}
-			else if (token.type === TOKEN_TEXT) {
-				// Create text node (span) for standalone text
-				if (token.value.trim()) {
-					children.push({
-						type: NODE_TYPE_ELEMENT,
-						tag: 'span',
-						props: {
-							innerText: {
-								type: VALUE_TYPE_STATIC,
-								data: token.value.trim(),
-							},
-						},
-						children: [],
-					});
-				}
-				j++;
-			}
-			else if (token.type === TOKEN_EXPRESSION) {
-				// Create text node (span) for standalone expression
-				children.push({
-					type: NODE_TYPE_ELEMENT,
-					tag: 'span',
-					props: {
-						innerText: {
-							type: VALUE_TYPE_FIELD,
-							data: token.value,
-						},
-					},
-					children: [],
-				});
-				j++;
-			}
-			else if (token.type === TOKEN_CONDITIONAL) {
-				// Build conditional node
-				const child_nodes = nodes_from_tokens(token.body);
-				
-				let child_node;
-				if (child_nodes.length === 1) {
-					child_node = child_nodes[0];
-				}
-				else {
-					// Multiple children - wrap in a span
-					child_node = {
-						type: NODE_TYPE_ELEMENT,
-						tag: 'span',
-						props: {},
-						children: child_nodes,
-					};
-				}
-				
-				const condition = {
-					type: VALUE_TYPE_FIELD,
-					data: token.condition,
-				};
-				
-				children.push({
-					type: NODE_TYPE_IF,
-					condition,
-					child: child_node,
-				});
-				j++;
-			}
-			else {
-				j++;
-			}
-		}
+		// Use the consolidated build_nodes_from_tokens function
+		const result = build_nodes_from_tokens(contentTokens, 0, contentTokens.length);
+		children.push(...result.nodes);
 	}
 	
 	return {
@@ -847,19 +771,57 @@ function build_children(tokens, startIndex, parentTag) {
 /**
 	Builds a value object from text and expression tokens.
 	@param {Array} tokens - Array of TOKEN_TEXT and TOKEN_EXPRESSION
-	@returns {Object} Value object
+	@returns {Object} Value object or null if empty
 */
 function build_value_from_tokens(tokens) {
-	// Filter out empty text
-	const filtered = tokens.filter(t => 
-		t.type === TOKEN_EXPRESSION || (t.type === TOKEN_TEXT && t.value.trim())
-	);
+	// Don't filter - preserve all text including whitespace
+	// Only skip completely empty tokens at the edges
+	const filtered = [];
+	let hasContent = false;
+	
+	for (const token of tokens) {
+		if (token.type === TOKEN_EXPRESSION) {
+			filtered.push(token);
+			hasContent = true;
+		}
+		else if (token.type === TOKEN_TEXT) {
+			// Keep all text, even whitespace, to preserve spacing
+			filtered.push(token);
+			if (token.value.trim()) {
+				hasContent = true;
+			}
+		}
+	}
+	
+	if (!hasContent) {
+		return null;
+	}
+	
+	// Trim only leading and trailing whitespace from the entire sequence
+	// Remove leading whitespace from first token
+	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT) {
+		const trimmed = filtered[0].value.replace(/^\s+/, '');
+		if (trimmed) {
+			filtered[0] = { ...filtered[0], value: trimmed };
+		}
+		else {
+			filtered.shift();
+		}
+	}
+	
+	// Remove trailing whitespace from last token
+	if (filtered.length > 0 && filtered[filtered.length - 1].type === TOKEN_TEXT) {
+		const trimmed = filtered[filtered.length - 1].value.replace(/\s+$/, '');
+		if (trimmed) {
+			filtered[filtered.length - 1] = { ...filtered[filtered.length - 1], value: trimmed };
+		}
+		else {
+			filtered.pop();
+		}
+	}
 	
 	if (filtered.length === 0) {
-		return {
-			type: VALUE_TYPE_STATIC,
-			data: '',
-		};
+		return null;
 	}
 	
 	if (filtered.length === 1) {

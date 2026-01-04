@@ -123,6 +123,12 @@ function value_generate(value, identation) {
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
 	case VALUE_TYPE_FIELD:
+		// Allow JavaScript expressions for conditionals (e.g., !(variable))
+		// These start with ! or other operators
+		if (/^[!()]/.test(value.data) || value.data.includes('(')) {
+			// This is a JavaScript expression, not a simple identifier
+			return value.data;
+		}
 		assert_identifier(value.data);
 		return value.data;
 	case VALUE_TYPE_STRING_CONCAT: return string_concat_generate(value.data, identation);
