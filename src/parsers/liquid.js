@@ -1,4 +1,3 @@
-import { type } from 'os';
 import {
 	NODE_TYPE_ELEMENT,
 	VALUE_TYPE_FIELD,
@@ -115,10 +114,12 @@ class Tokenizer {
 		@param {string} desc - Description of the context
 	*/
 	chars_consume_until(limit, desc) {
+		const index_start = this.index;
 		const index_end = this.src.indexOf(limit, this.index);
 		if (index_end === -1) this.error(`Unclosed ${desc}`);
+		const content = this.src.slice(index_start, index_end);
 		this.chars_step(index_end + limit.length - this.index);
-		return this.src.slice(this.index, index_end);
+		return content;
 	}
 
 	/**
@@ -208,9 +209,11 @@ class Tokenizer {
 		if (this.chars_match('{{')) {
 			this.chars_consume('{{');
 			const expression = this.chars_consume_until('}}', 'liquid expression');
+			const varName = expression.trim();
+			this.variables.set(varName, null);
 			return {
 				type: TOKEN_EXPRESSION,
-				value: expression.trim(),
+				value: varName,
 			};
 		}
 		if (
@@ -245,6 +248,174 @@ class Tokenizer {
 		this.chars_consume('{%');
 		const content = this.chars_consume_until('%}', 'liquid script');
 		// find variable assignments and store the variables and their definitions
+		// For now, we skip liquid script tags
+		return null;
+	}
+
+	/**
+		Parses a liquid conditional (if/unless) block.
+		@returns {Object} Token
+	*/
+	parse_liquid_conditional() {
+		// For now, we don't support conditionals in simple templates
+		this.error('Liquid conditionals are not supported in simple templates');
+	}
+
+	/**
+		Parses a liquid loop (for) block.
+		@returns {Object} Token
+	*/
+	parse_liquid_loop() {
+		// For now, we don't support loops in simple templates
+		this.error('Liquid loops are not supported in simple templates');
+	}
+
+	/**
+		Parses static text content.
+		@returns {Object} Token
+	*/
+	parse_text() {
+		let text = '';
+		while (this.index < this.src.length) {
+			const char = this.char_current();
+			if (char === '<' || char === '{') break;
+			text += char;
+			this.char_step();
+		}
+		return {
+			type: TOKEN_TEXT,
+			value: text,
+		};
+	}
+
+	/**
+		Parses a tag name (can be static or dynamic).
+		@returns {string} Tag name
+	*/
+	parse_tag_name() {
+		let name = '';
+		while (this.index < this.src.length) {
+			const char = this.char_current();
+			if (html_is_whitespace(char) || char === '>' || char === '/') break;
+			name += char;
+			this.char_step();
+		}
+		return name;
+	}
+
+	/**
+		Parses HTML attributes.
+		@returns {Array} Array of attribute tokens
+	*/
+	parse_attributes() {
+		const attributes = [];
+		
+		while (this.index < this.src.length) {
+			// Skip whitespace
+			while (html_is_whitespace(this.char_current())) {
+				this.char_step();
+			}
+			
+			const char = this.char_current();
+			if (char === '>' || char === '/') break;
+			
+			// Parse attribute name
+			let name = '';
+			while (this.index < this.src.length) {
+				const c = this.char_current();
+				if (html_is_whitespace(c) || c === '=' || c === '>' || c === '/') break;
+				name += c;
+				this.char_step();
+			}
+			
+			if (!name) break;
+			
+			// Skip whitespace after name
+			while (html_is_whitespace(this.char_current())) {
+				this.char_step();
+			}
+			
+			// Check for '='
+			let value_tokens = null;
+			if (this.char_current() === '=') {
+				this.char_step();
+				
+				// Skip whitespace after '='
+				while (html_is_whitespace(this.char_current())) {
+					this.char_step();
+				}
+				
+				// Parse attribute value
+				const quote = this.char_current();
+				if (quote === '"' || quote === "'") {
+					this.char_step();
+					value_tokens = this.parse_attribute_value(quote);
+					this.chars_consume(quote);
+				}
+				else {
+					this.error('Expected quoted attribute value');
+				}
+			}
+			
+			attributes.push({
+				type: TOKEN_ATTRIBUTE,
+				name: html_attr_to_dom(name),
+				value: value_tokens,
+			});
+		}
+		
+		return attributes;
+	}
+
+	/**
+		Parses an attribute value which can contain text and liquid expressions.
+		@param {string} quote - The quote character used
+		@returns {Array} Array of tokens (text and/or expressions)
+	*/
+	parse_attribute_value(quote) {
+		const tokens = [];
+		let text = '';
+		
+		while (this.index < this.src.length) {
+			const char = this.char_current();
+			
+			if (char === quote) break;
+			
+			if (char === '{' && this.chars_match('{{')) {
+				// Save accumulated text
+				if (text) {
+					tokens.push({
+						type: TOKEN_TEXT,
+						value: text,
+					});
+					text = '';
+				}
+				
+				// Parse liquid expression
+				this.chars_consume('{{');
+				const expression = this.chars_consume_until('}}', 'liquid expression');
+				const varName = expression.trim();
+				this.variables.set(varName, null);
+				tokens.push({
+					type: TOKEN_EXPRESSION,
+					value: varName,
+				});
+			}
+			else {
+				text += char;
+				this.char_step();
+			}
+		}
+		
+		// Add remaining text
+		if (text) {
+			tokens.push({
+				type: TOKEN_TEXT,
+				value: text,
+			});
+		}
+		
+		return tokens.length === 0 ? null : tokens;
 	}
 }
 
@@ -254,5 +425,264 @@ class Tokenizer {
 	@returns {Array} Array of Nodes
 */
 function nodes_from_tokens(tokens) {
-	// TODO
+	const nodes = [];
+	let i = 0;
+	
+	while (i < tokens.length) {
+		const token = tokens[i];
+		
+		if (token.type === TOKEN_HTML_START) {
+			const node = build_element_node(tokens, i);
+			nodes.push(node.element);
+			i = node.nextIndex;
+		}
+		else if (token.type === TOKEN_HTML_END) {
+			// End tag without matching start - this shouldn't happen in well-formed HTML
+			// but we'll just skip it
+			i++;
+		}
+		else if (token.type === TOKEN_TEXT) {
+			// Skip pure whitespace text nodes at the root level
+			if (token.value.trim()) {
+				// Text nodes at root level should be wrapped, but for simple templates
+				// they shouldn't exist. We'll skip them.
+			}
+			i++;
+		}
+		else if (token.type === TOKEN_EXPRESSION) {
+			// Expression at root level - skip for simple templates
+			i++;
+		}
+		else {
+			i++;
+		}
+	}
+	
+	return nodes;
+}
+
+/**
+	Builds an element node from tokens, including its children.
+	@param {Array} tokens - Array of all tokens
+	@param {number} startIndex - Index of the TOKEN_HTML_START
+	@returns {Object} Object with element and nextIndex
+*/
+function build_element_node(tokens, startIndex) {
+	const startToken = tokens[startIndex];
+	const tag = startToken.tag_name;
+	
+	// Build props from attributes
+	const props = {};
+	if (startToken.attributes) {
+		for (const attr of startToken.attributes) {
+			if (attr.value === null) {
+				// Boolean attribute
+				props[attr.name] = {
+					type: VALUE_TYPE_STATIC,
+					data: true,
+				};
+			}
+			else if (attr.value.length === 1 && attr.value[0].type === TOKEN_TEXT) {
+				// Pure static value
+				props[attr.name] = {
+					type: VALUE_TYPE_STATIC,
+					data: attr.value[0].value,
+				};
+			}
+			else if (attr.value.length === 1 && attr.value[0].type === TOKEN_EXPRESSION) {
+				// Pure expression
+				props[attr.name] = {
+					type: VALUE_TYPE_FIELD,
+					data: attr.value[0].value,
+				};
+			}
+			else {
+				// Mixed content - string concatenation
+				const parts = attr.value.map(token => {
+					if (token.type === TOKEN_TEXT) {
+						return {
+							type: VALUE_TYPE_STATIC,
+							data: token.value,
+						};
+					}
+					else {
+						return {
+							type: VALUE_TYPE_FIELD,
+							data: token.value,
+						};
+					}
+				});
+				props[attr.name] = {
+					type: VALUE_TYPE_STRING_CONCAT,
+					data: parts,
+				};
+			}
+		}
+	}
+	
+	// Check if self-closing
+	const isSelfClosing = html_is_self_closing(tag);
+	
+	let children = [];
+	let nextIndex = startIndex + 1;
+	
+	if (!isSelfClosing) {
+		// Find matching end tag and build children
+		const result = build_children(tokens, nextIndex, tag);
+		children = result.children;
+		nextIndex = result.nextIndex;
+	}
+	
+	// If there's only text content, set it as innerText
+	if (children.length === 0 && !props.innerText) {
+		// Check for text content
+		const contentTokens = [];
+		let i = startIndex + 1;
+		while (i < tokens.length) {
+			const token = tokens[i];
+			if (token.type === TOKEN_HTML_END && token.tag_name === tag) {
+				break;
+			}
+			if (token.type === TOKEN_TEXT || token.type === TOKEN_EXPRESSION) {
+				contentTokens.push(token);
+			}
+			else {
+				// Has child elements, not pure text
+				contentTokens.length = 0;
+				break;
+			}
+			i++;
+		}
+		
+		if (contentTokens.length > 0) {
+			props.innerText = build_value_from_tokens(contentTokens);
+		}
+	}
+	
+	return {
+		element: {
+			type: NODE_TYPE_ELEMENT,
+			tag,
+			props,
+			children,
+		},
+		nextIndex,
+	};
+}
+
+/**
+	Builds children nodes until the matching end tag is found.
+	@param {Array} tokens - Array of all tokens
+	@param {number} startIndex - Index to start parsing children
+	@param {string} parentTag - Parent tag name to match end tag
+	@returns {Object} Object with children array and nextIndex
+*/
+function build_children(tokens, startIndex, parentTag) {
+	const children = [];
+	let i = startIndex;
+	
+	// Collect content tokens until we find the end tag
+	const contentTokens = [];
+	let depth = 1;
+	
+	while (i < tokens.length && depth > 0) {
+		const token = tokens[i];
+		
+		if (token.type === TOKEN_HTML_START && token.tag_name === parentTag) {
+			depth++;
+		}
+		else if (token.type === TOKEN_HTML_END && token.tag_name === parentTag) {
+			depth--;
+			if (depth === 0) {
+				i++; // Skip the end tag
+				break;
+			}
+		}
+		
+		contentTokens.push(token);
+		i++;
+	}
+	
+	// Check if content is pure text/expressions (for innerText)
+	const hasElements = contentTokens.some(t => 
+		t.type === TOKEN_HTML_START || t.type === TOKEN_HTML_END
+	);
+	
+	if (hasElements) {
+		// Parse child elements
+		let j = 0;
+		while (j < contentTokens.length) {
+			const token = contentTokens[j];
+			
+			if (token.type === TOKEN_HTML_START) {
+				const node = build_element_node(contentTokens, j);
+				children.push(node.element);
+				j = node.nextIndex;
+			}
+			else {
+				j++;
+			}
+		}
+	}
+	
+	return {
+		children,
+		nextIndex: i,
+	};
+}
+
+/**
+	Builds a value object from text and expression tokens.
+	@param {Array} tokens - Array of TOKEN_TEXT and TOKEN_EXPRESSION
+	@returns {Object} Value object
+*/
+function build_value_from_tokens(tokens) {
+	// Filter out empty text
+	const filtered = tokens.filter(t => 
+		t.type === TOKEN_EXPRESSION || (t.type === TOKEN_TEXT && t.value.trim())
+	);
+	
+	if (filtered.length === 0) {
+		return {
+			type: VALUE_TYPE_STATIC,
+			data: '',
+		};
+	}
+	
+	if (filtered.length === 1) {
+		const token = filtered[0];
+		if (token.type === TOKEN_TEXT) {
+			return {
+				type: VALUE_TYPE_STATIC,
+				data: token.value,
+			};
+		}
+		else {
+			return {
+				type: VALUE_TYPE_FIELD,
+				data: token.value,
+			};
+		}
+	}
+	
+	// Multiple parts - string concatenation
+	const parts = filtered.map(token => {
+		if (token.type === TOKEN_TEXT) {
+			return {
+				type: VALUE_TYPE_STATIC,
+				data: token.value,
+			};
+		}
+		else {
+			return {
+				type: VALUE_TYPE_FIELD,
+				data: token.value,
+			};
+		}
+	});
+	
+	return {
+		type: VALUE_TYPE_STRING_CONCAT,
+		data: parts,
+	};
 }
