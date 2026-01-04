@@ -123,10 +123,10 @@ function value_generate(value, identation) {
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
 	case VALUE_TYPE_FIELD:
-		// Allow JavaScript expressions for conditionals (e.g., !(variable))
-		// These start with ! or other operators
-		if (/^[!()]/.test(value.data) || value.data.includes('(')) {
-			// This is a JavaScript expression, not a simple identifier
+		// Allow negation for unless conditionals: !(identifier)
+		const negationMatch = value.data.match(/^!\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)$/);
+		if (negationMatch) {
+			// This is a negated identifier from unless, safe to pass through
 			return value.data;
 		}
 		assert_identifier(value.data);
