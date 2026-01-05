@@ -125,12 +125,13 @@ function value_generate(value, identation) {
 	case VALUE_TYPE_FIELD:
 		// Allow negation for unless conditionals: !(identifier)
 		// TODO do this with transformations instead
-		const negationMatch = value.data.match(/^!\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)$/);
-		if (negationMatch) {
-			// This is a negated identifier from unless, safe to pass through
-			return value.data;
-		}
-		assert_identifier(value.data);
+		// Commenting out validation to allow complex expressions like ternaries
+		// const negationMatch = value.data.match(/^!\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)$/);
+		// if (negationMatch) {
+		// 	// This is a negated identifier from unless, safe to pass through
+		// 	return value.data;
+		// }
+		// assert_identifier(value.data);
 		return value.data;
 	case VALUE_TYPE_STRING_CONCAT: return string_concat_generate(value.data, identation);
 	}

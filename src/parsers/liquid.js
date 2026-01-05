@@ -7,6 +7,7 @@ import {
 } from '../constants.js';
 import {
 	html_attr_to_dom,
+	html_is_boolean_attr,
 	html_is_self_closing,
 	html_is_whitespace,
 } from '../parser.js';
@@ -388,6 +389,17 @@ class Tokenizer {
 			const char = this.char_current();
 			if (char === '>' || char === '/') break;
 
+			// Check for conditional
+			if (char === '{' && this.chars_match('{%')) {
+				const conditional = this.parse_attribute_conditional();
+				// Store conditional with attributes for later processing
+				attributes.push({
+					type: TOKEN_CONDITIONAL,
+					...conditional,
+				});
+				continue;
+			}
+
 			const position = this.position_get();
 
 			// Parse attribute name
@@ -424,7 +436,25 @@ class Tokenizer {
 					this.chars_consume(quote);
 				}
 				else {
-					error('Expected quoted attribute value', this);
+					// Unquoted attribute value
+					value_tokens = [];
+					let text = '';
+					const text_position = this.position_get();
+					
+					while (this.index < this.src.length) {
+						const c = this.char_current();
+						if (html_is_whitespace(c) || c === '>' || c === '/') break;
+						text += c;
+						this.char_step();
+					}
+					
+					if (text) {
+						value_tokens.push({
+							type: TOKEN_TEXT,
+							value: text,
+							...text_position,
+						});
+					}
 				}
 			}
 
@@ -437,6 +467,127 @@ class Tokenizer {
 		}
 
 		return attributes;
+	}
+
+	/**
+		Parses a conditional block inside an attribute context.
+		@returns {Object} Conditional token
+	*/
+	parse_attribute_conditional() {
+		const position = this.position_get();
+		const is_unless = this.chars_match('{% unless');
+		const start_tag = is_unless ? '{% unless' : '{% if';
+		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
+
+		this.chars_consume(start_tag);
+
+		// Parse the condition expression
+		const condition_expr = this.chars_consume_until('%}', 'liquid conditional');
+		const condition_var = condition_expr.trim();
+		this.variables.set(condition_var, null);
+
+		// Parse the body - should contain attributes
+		const body_tokens = [];
+		
+		// Skip whitespace after opening tag
+		while (html_is_whitespace(this.char_current())) {
+			this.char_step();
+		}
+		
+		// Parse all content until we hit {% endif %} or {% endunless %}
+		while (this.index < this.src.length) {
+			if (this.chars_match(end_tag)) {
+				this.chars_consume(end_tag);
+				break;
+			}
+
+			// Skip whitespace
+			if (html_is_whitespace(this.char_current())) {
+				this.char_step();
+				continue;
+			}
+
+			// Parse attribute inside conditional
+			const attr_position = this.position_get();
+			let name = '';
+			while (this.index < this.src.length) {
+				const c = this.char_current();
+				if (html_is_whitespace(c) || c === '=' || c === '{') break;
+				name += c;
+				this.char_step();
+			}
+
+			if (!name) break;
+
+			// Skip whitespace after name
+			while (html_is_whitespace(this.char_current())) {
+				this.char_step();
+			}
+
+			// Check for '='
+			let value_tokens = null;
+			if (this.char_current() === '=') {
+				this.char_step();
+
+				// Skip whitespace after '='
+				while (html_is_whitespace(this.char_current())) {
+					this.char_step();
+				}
+
+				// Parse attribute value
+				const quote = this.char_current();
+				if (quote === '"' || quote === "'") {
+					this.char_step();
+					value_tokens = this.parse_attribute_value(quote);
+					this.chars_consume(quote);
+				}
+				else {
+					// Unquoted attribute value - read until whitespace or end tag
+					value_tokens = [];
+					let text = '';
+					const text_position = this.position_get();
+					
+					while (this.index < this.src.length) {
+						if (this.chars_match(end_tag)) break;
+						const c = this.char_current();
+						if (html_is_whitespace(c)) break;
+						text += c;
+						this.char_step();
+					}
+					
+					if (text) {
+						value_tokens.push({
+							type: TOKEN_TEXT,
+							value: text,
+							...text_position,
+						});
+					}
+				}
+			}
+
+			body_tokens.push({
+				type: TOKEN_ATTRIBUTE,
+				name: html_attr_to_dom(name),
+				value: value_tokens,
+				...attr_position,
+			});
+			
+			// After parsing one attribute, check if we're at the end tag
+			while (html_is_whitespace(this.char_current())) {
+				this.char_step();
+			}
+			if (this.chars_match(end_tag)) {
+				// Don't consume it here, let the outer loop handle it
+				continue;
+			}
+		}
+
+		return {
+			is_unless,
+			condition: condition_var,
+			body: body_tokens,
+			...position,
+		};
 	}
 
 	/**
@@ -591,11 +742,67 @@ function build_element_node(tokens, index) {
 	const props = {};
 	if (token_start.attributes)
 	for (const attr of token_start.attributes) {
-		props[attr.name] = (
-			attr.value === null // boolean
-			?	{type: VALUE_TYPE_STATIC, data: true}
-			:	build_value(attr.value)
-		);
+		if (attr.type === TOKEN_CONDITIONAL) {
+			// Conditional wrapping attributes
+			// Process attributes inside the conditional body
+			for (const body_token of attr.body) {
+				if (body_token.type === TOKEN_ATTRIBUTE) {
+					const attr_name = body_token.name;
+					const is_boolean = html_is_boolean_attr(attr_name);
+					
+					if (is_boolean) {
+						// Boolean attribute: set to condition or inverted condition
+						if (attr.is_unless) {
+							props[attr_name] = {
+								type: VALUE_TYPE_FIELD,
+								data: `!(${attr.condition})`,
+							};
+						} else {
+							props[attr_name] = {
+								type: VALUE_TYPE_FIELD,
+								data: attr.condition,
+							};
+						}
+					} else {
+						// Non-boolean attribute: use ternary operator
+						const value = body_token.value === null 
+							? { type: VALUE_TYPE_STATIC, data: true }
+							: build_value(body_token.value);
+						
+						const condition_expr = attr.is_unless 
+							? `!(${attr.condition})` 
+							: attr.condition;
+						
+						// Create ternary: condition ? value : undefined
+						if (value.type === VALUE_TYPE_STATIC) {
+							props[attr_name] = {
+								type: VALUE_TYPE_FIELD,
+								data: `${condition_expr} ? ${JSON.stringify(value.data)} : undefined`,
+							};
+						} else if (value.type === VALUE_TYPE_FIELD) {
+							props[attr_name] = {
+								type: VALUE_TYPE_FIELD,
+								data: `${condition_expr} ? ${value.data} : undefined`,
+							};
+						} else {
+							// STRING_CONCAT - need to generate the template literal
+							// For now, store as field with complex expression
+							props[attr_name] = {
+								type: VALUE_TYPE_FIELD,
+								data: `${condition_expr} ? (${generate_value_inline(value)}) : undefined`,
+							};
+						}
+					}
+				}
+			}
+		} else {
+			// Regular attribute
+			props[attr.name] = (
+				attr.value === null // boolean
+				?	{type: VALUE_TYPE_STATIC, data: true}
+				:	build_value(attr.value)
+			);
+		}
 	}
 
 	let children = [];
@@ -634,6 +841,26 @@ function build_element_node(tokens, index) {
 		},
 		index,
 	};
+}
+
+// Helper to generate value inline for complex expressions
+function generate_value_inline(value) {
+	if (value.type === VALUE_TYPE_STATIC) {
+		return JSON.stringify(value.data);
+	} else if (value.type === VALUE_TYPE_FIELD) {
+		return value.data;
+	} else if (value.type === VALUE_TYPE_STRING_CONCAT) {
+		// Generate template literal
+		const parts = value.data.map(part => {
+			if (part.type === VALUE_TYPE_STATIC) {
+				return part.data.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+			} else {
+				return '${' + part.data + '}';
+			}
+		});
+		return '`' + parts.join('') + '`';
+	}
+	return 'undefined';
 }
 
 /**
