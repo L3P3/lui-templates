@@ -268,7 +268,7 @@ class Tokenizer {
 		}
 
 		this.chars_consume('{');
-		this.chars_step(); // skip { or %
+		this.char_step(); // skip second { or %
 
 		let value = (
 			is_expression
@@ -296,6 +296,7 @@ class Tokenizer {
 
 		// liquid tag
 		const [command_str, ...args] = value.split(' ');
+		if (!command_str) error('Empty liquid tag command', position);
 		value = args.join(' ').trimStart();
 
 		switch (command_str) {
@@ -558,6 +559,46 @@ class Tokenizer {
 }
 
 /**
+	Generic conditional helper that finds matching end tag and processes body.
+	@param {Array} tokens
+	@param {number} index - Index of the opening conditional token
+	@param {number} index_end - End of search range (exclusive)
+	@param {Function} process_body - Function to process tokens in body
+	@returns {Object} {result, index} - result from process_body and index after end tag
+*/
+function build_conditional(tokens, index, index_end, process_body) {
+	const token = tokens[index];
+	const is_unless = token.command === COMMAND_UNLESS;
+	const condition = token.value;
+	const end_command = is_unless ? COMMAND_ENDUNLESS : COMMAND_ENDIF;
+
+	// find matching end tag
+	let depth = 1;
+	let body_end = index + 1;
+	for (; body_end < index_end; body_end++) {
+		const t = tokens[body_end];
+		if (t.type !== TOKEN_LIQUID) continue;
+
+		if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
+			depth++;
+		}
+		else if (t.command === end_command && --depth <= 0) break;
+	}
+
+	if (depth > 0) {
+		error(`Unclosed ${command_map_reverse.get(token.command)} block`, token);
+	}
+
+	// Process body with provided function
+	const result = process_body(tokens, index + 1, body_end, is_unless, condition);
+
+	return {
+		result,
+		index: body_end + 1,
+	};
+}
+
+/**
 	Build nodes from a token range.
 	@param {Array} tokens
 	@param {number} index start
@@ -610,57 +651,29 @@ function build_nodes(tokens, index, index_end) {
 			switch (token.command) {
 			case COMMAND_IF:
 			case COMMAND_UNLESS: {
-				const is_unless = token.command === COMMAND_UNLESS;
-				const condition = token.value;
-				const end_command = is_unless ? COMMAND_ENDUNLESS : COMMAND_ENDIF;
-
-				// find matching end tag
-				let depth = 1;
-				let body_end = index + 1;
-				for (; body_end < index_end; body_end++) {
-					const t = tokens[body_end];
-					if (t.type !== TOKEN_LIQUID) continue;
-
-					if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
-						depth++;
-					}
-					else if (
-						t.command === end_command &&
-						--depth <= 0
-					) break;
-				}
-
-				if (depth > 0) {
-					error(`Unclosed ${command_map_reverse.get(token.command)} block`, token);
-				}
-
-				// Build children from body
-				const children = build_nodes(tokens, index + 1, body_end);
-
-				nodes.push({
-					type: NODE_TYPE_IF,
-					condition: {
-						type: VALUE_TYPE_FIELD,
-						data: (
-							is_unless
-							?	`!(${condition})`
-							:	condition
+				const conditional = build_conditional(tokens, index, index_end, (tokens, start, end, is_unless, condition) => {
+					const children = build_nodes(tokens, start, end);
+					return {
+						type: NODE_TYPE_IF,
+						condition: {
+							type: VALUE_TYPE_FIELD,
+							data: is_unless ? `!(${condition})` : condition,
+						},
+						child: (
+							children.length === 1
+							?	children[0]
+							:	{
+								type: NODE_TYPE_ELEMENT,
+								tag: 'span',
+								props: {},
+								children,
+							}
 						),
-					},
-					child: (
-						children.length === 1
-						?	children[0]
-						:	{
-							type: NODE_TYPE_ELEMENT,
-							tag: 'span',
-							props: {},
-							children,
-						}
-					),
+					};
 				});
 
-				// Skip past the end tag
-				index = body_end + 1;
+				nodes.push(conditional.result);
+				index = conditional.index;
 				continue;
 			}
 			case COMMAND_ENDIF:
@@ -712,73 +725,49 @@ function build_element_node(tokens, index) {
 			break;
 		case COMMAND_IF:
 		case COMMAND_UNLESS: {
-			const is_unless = token.command === COMMAND_UNLESS;
-			const end_command = is_unless ? COMMAND_ENDUNLESS : COMMAND_ENDIF;
-			// skip the conditional
-			index++;
-			// find the end and collect attributes in between
-			const body_attrs = [];
-			for (let depth = 1; index < token_start.attributes.length; index++) {
-				const t = token_start.attributes[index];
-				if (t.type === TOKEN_LIQUID) {
-					if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
-						depth++;
+			const conditional = build_conditional(
+				token_start.attributes,
+				index,
+				token_start.attributes.length,
+				(tokens, start, end, is_unless, condition) => {
+					// Process attributes in conditional body
+					const result_props = {};
+					for (let i = start; i < end; i++) {
+						const t = tokens[i];
+						if (t.type === TOKEN_LIQUID) continue; // nested conditionals handled recursively
+						if (t.type !== TOKEN_ATTRIBUTE) error('Unexpected token in conditional attributes', t);
+
+						if (t.value === null) { // boolean attribute
+							result_props[t.name] = {
+								type: VALUE_TYPE_FIELD,
+								data: is_unless ? `!(${condition})` : condition,
+							};
+						}
+						else { // non-boolean attribute with value
+							const value = build_value(t.value);
+							const value_str = (
+								value.type === VALUE_TYPE_STATIC
+								?	JSON.stringify(value.data)
+								: value.type === VALUE_TYPE_FIELD
+								?	value.data
+								: 	generate_value_inline(value, t)
+							);
+							result_props[t.name] = {
+								type: VALUE_TYPE_FIELD,
+								data: is_unless
+									? `${condition} ? "" : ${value_str}`
+									: `${condition} ? ${value_str} : ""`,
+							};
+						}
 					}
-					else if (
-						t.command === end_command ||
-						--depth <= 0
-					) break;
+					return result_props;
 				}
-				else if (depth === 1 && t.type === TOKEN_ATTRIBUTE) {
-					body_attrs.push(t);
-				}
-			}
-			// check if we missed the end command
-			if (index >= token_start.attributes.length) {
-				error(`Unclosed ${command_map_reverse.get(token.command)} block in attributes`, token);
-			}
+			);
 
-			const condition = token.value;
-			// attributes inside the conditional
-			for (const body_attr of body_attrs) {
-				if (body_attr.type !== TOKEN_ATTRIBUTE) {
-					error('Nested conditionals in attributes not supported yet.', body_attr);
-				}
-				if (body_attr.value === null) { // boolean
-					props[body_attr.name] = {
-						type: VALUE_TYPE_FIELD,
-						data: (
-							is_unless
-							?	`!(${condition})`
-							:	condition
-						),
-					};
-				}
-				else {
-					const value = build_value(body_attr.value);
-
-					props[body_attr.name] = {
-						type: VALUE_TYPE_FIELD,
-						data: (
-							is_unless
-							?	(
-								value.type === VALUE_TYPE_STATIC
-								?	`${condition} ? "" : ${JSON.stringify(value.data)}`
-								: value.type === VALUE_TYPE_FIELD
-								?	`${condition} ? "" : ${value.data}`
-								: 	`${condition} ? "" : ${generate_value_inline(value, body_attr.value.position)}`
-							)
-							:	(
-								value.type === VALUE_TYPE_STATIC
-								?	`${condition} ? ${JSON.stringify(value.data)} : ""`
-								: value.type === VALUE_TYPE_FIELD
-								?	`${condition} ? ${value.data} : ""`
-								: 	`${condition} ? ${generate_value_inline(value, body_attr.value.position)} : ""`
-							)
-						),
-					};
-				} // else
-			} // for
+			// Merge conditional props into main props
+			Object.assign(props, conditional.result);
+			index = conditional.index - 1; // -1 because for loop will increment
+			break;
 		}// case
 		}// switch
 	}
