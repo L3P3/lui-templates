@@ -7,7 +7,6 @@ import {
 } from '../constants.js';
 import {
 	html_attr_to_dom,
-	html_is_boolean_attr,
 	html_is_self_closing,
 	html_is_whitespace,
 } from '../parser.js';
@@ -748,7 +747,7 @@ function build_element_node(tokens, index) {
 			for (const body_token of attr.body) {
 				if (body_token.type === TOKEN_ATTRIBUTE) {
 					const attr_name = body_token.name;
-					const is_boolean = html_is_boolean_attr(attr_name);
+					const is_boolean = body_token.value === null; // Boolean if no = sign
 					
 					if (is_boolean) {
 						// Boolean attribute: set to condition or inverted condition
@@ -765,32 +764,48 @@ function build_element_node(tokens, index) {
 						}
 					} else {
 						// Non-boolean attribute: use ternary operator
-						const value = body_token.value === null 
-							? { type: VALUE_TYPE_STATIC, data: true }
-							: build_value(body_token.value);
+						const value = build_value(body_token.value);
 						
-						const condition_expr = attr.is_unless 
-							? `!(${attr.condition})` 
-							: attr.condition;
-						
-						// Create ternary: condition ? value : undefined
-						if (value.type === VALUE_TYPE_STATIC) {
-							props[attr_name] = {
-								type: VALUE_TYPE_FIELD,
-								data: `${condition_expr} ? ${JSON.stringify(value.data)} : undefined`,
-							};
-						} else if (value.type === VALUE_TYPE_FIELD) {
-							props[attr_name] = {
-								type: VALUE_TYPE_FIELD,
-								data: `${condition_expr} ? ${value.data} : undefined`,
-							};
+						// Create ternary: condition ? value : ""
+						// For unless, swap the order: condition ? "" : value
+						if (attr.is_unless) {
+							// unless: if condition is false, use value, else empty string
+							if (value.type === VALUE_TYPE_STATIC) {
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? "" : ${JSON.stringify(value.data)}`,
+								};
+							} else if (value.type === VALUE_TYPE_FIELD) {
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? "" : ${value.data}`,
+								};
+							} else {
+								// STRING_CONCAT - need to generate the template literal
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? "" : (${generate_value_inline(value)})`,
+								};
+							}
 						} else {
-							// STRING_CONCAT - need to generate the template literal
-							// For now, store as field with complex expression
-							props[attr_name] = {
-								type: VALUE_TYPE_FIELD,
-								data: `${condition_expr} ? (${generate_value_inline(value)}) : undefined`,
-							};
+							// if: if condition is true, use value, else empty string
+							if (value.type === VALUE_TYPE_STATIC) {
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? ${JSON.stringify(value.data)} : ""`,
+								};
+							} else if (value.type === VALUE_TYPE_FIELD) {
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? ${value.data} : ""`,
+								};
+							} else {
+								// STRING_CONCAT - need to generate the template literal
+								props[attr_name] = {
+									type: VALUE_TYPE_FIELD,
+									data: `${attr.condition} ? (${generate_value_inline(value)}) : ""`,
+								};
+							}
 						}
 					}
 				}
