@@ -1,0 +1,9 @@
+<div>
+  {% if outer %}
+    <h1>Outer is true</h1>
+    {% if inner %}
+      <p>Both outer and inner are true</p>
+    {% endif %}
+  {% endif %}
+  <span>Always visible</span>
+</div>
