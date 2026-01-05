@@ -495,9 +495,9 @@ class Tokenizer {
 	}
 
 	/**
-		Parses an attribute value which can contain text and liquid expressions.
+		Parses an attribute value which can contain text, liquid expressions, and liquid tags.
 		@param {string} quote - The quote character used
-		@returns {Array} Array of tokens (text and/or expressions)
+		@returns {Array} Array of tokens (text, expressions, and liquid tags)
 	*/
 	parse_attribute_value(quote) {
 		const tokens = [];
@@ -509,7 +509,26 @@ class Tokenizer {
 
 			if (char === quote) break;
 
-			if (char === '{' && this.chars_match('{{')) {
+			// Check for liquid tag {% ... %}
+			if (char === '{' && this.chars_match('{%')) {
+				// Save accumulated text
+				if (text) {
+					tokens.push({
+						type: TOKEN_TEXT,
+						...text_position,
+						trim_before: false,
+						trim_after: false,
+						value: text,
+					});
+					text = '';
+				}
+
+				// Parse liquid tag (same as in parse_liquid)
+				tokens.push(this.parse_liquid());
+				text_position = this.position_get();
+			}
+			// Check for liquid expression {{ ... }}
+			else if (char === '{' && this.chars_match('{{')) {
 				// Save accumulated text
 				if (text) {
 					tokens.push({
@@ -556,6 +575,69 @@ class Tokenizer {
 
 		return tokens.length === 0 ? null : tokens;
 	}
+}
+
+/**
+	Process conditional attributes with support for nested conditionals.
+	@param {Array} tokens
+	@param {number} start
+	@param {number} end
+	@param {string} condition_prefix
+	@param {Object} result_props
+	@returns {Object} result_props
+*/
+function process_conditional_attributes(tokens, start, end, condition_prefix, result_props) {
+	let i = start;
+	while (i < end) {
+		const t = tokens[i];
+		
+		if (t.type === TOKEN_LIQUID && (t.command === COMMAND_IF || t.command === COMMAND_UNLESS)) {
+			// Nested conditional
+			const nested_conditional = build_conditional(
+				tokens,
+				i,
+				end,
+				(tokens, nested_start, nested_end, is_unless, nested_condition) => {
+					const new_nested_condition = is_unless ? `!(${nested_condition})` : nested_condition;
+					const combined_condition = `${condition_prefix} && ${new_nested_condition}`;
+					const nested_props = {};
+					process_conditional_attributes(tokens, nested_start, nested_end, combined_condition, nested_props);
+					return nested_props;
+				}
+			);
+			Object.assign(result_props, nested_conditional.result);
+			i = nested_conditional.index;
+			continue;
+		}
+		
+		if (t.type !== TOKEN_ATTRIBUTE) {
+			i++;
+			continue;
+		}
+
+		if (t.value === null) { // boolean attribute
+			result_props[t.name] = {
+				type: VALUE_TYPE_FIELD,
+				data: condition_prefix,
+			};
+		}
+		else { // non-boolean attribute with value
+			const value = build_value(t.value);
+			const value_str = (
+				value.type === VALUE_TYPE_STATIC
+				?	JSON.stringify(value.data)
+				: value.type === VALUE_TYPE_FIELD
+				?	value.data
+				: 	generate_value_inline(value, t)
+			);
+			result_props[t.name] = {
+				type: VALUE_TYPE_FIELD,
+				data: `${condition_prefix} ? ${value_str} : ""`,
+			};
+		}
+		i++;
+	}
+	return result_props;
 }
 
 /**
@@ -753,37 +835,10 @@ function build_element_node(tokens, index) {
 				index,
 				token_start.attributes.length,
 				(tokens, start, end, is_unless, condition) => {
-					// Process attributes in conditional body
+					const new_condition = is_unless ? `!(${condition})` : condition;
+					// Process attributes in conditional body with prefix support
 					const result_props = {};
-					for (let i = start; i < end; i++) {
-						const t = tokens[i];
-						if (t.type === TOKEN_LIQUID) continue; // nested conditionals handled recursively
-						if (t.type !== TOKEN_ATTRIBUTE) error('Unexpected token in conditional attributes', t);
-
-						if (t.value === null) { // boolean attribute
-							result_props[t.name] = {
-								type: VALUE_TYPE_FIELD,
-								data: is_unless ? `!(${condition})` : condition,
-							};
-						}
-						else { // non-boolean attribute with value
-							const value = build_value(t.value);
-							const value_str = (
-								value.type === VALUE_TYPE_STATIC
-								?	JSON.stringify(value.data)
-								: value.type === VALUE_TYPE_FIELD
-								?	value.data
-								: 	generate_value_inline(value, t)
-							);
-							result_props[t.name] = {
-								type: VALUE_TYPE_FIELD,
-								data: is_unless
-									? `${condition} ? "" : ${value_str}`
-									: `${condition} ? ${value_str} : ""`,
-							};
-						}
-					}
-					return result_props;
+					return process_conditional_attributes(tokens, start, end, new_condition, result_props);
 				}
 			);
 
@@ -923,7 +978,12 @@ function build_children(tokens, index, tag_parent) {
 	@param {Array} tokens
 	@returns {Object}
 */
-function build_value(tokens) {
+function build_value(tokens, condition_prefix = '') {
+	// Handle conditionals in attribute values (for nested conditionals)
+	if (tokens.some(t => t.type === TOKEN_LIQUID)) {
+		return build_value_with_conditionals(tokens, condition_prefix);
+	}
+
 	// liquid trim feature {%- -%}
 	for (let index = 0; index < tokens.length; index++) {
 		const token = tokens[index];
@@ -956,6 +1016,131 @@ function build_value(tokens) {
 			data: values,
 		}
 	);
+}
+
+/**
+	Builds a value with conditional support (for attribute values with nested conditionals).
+	@param {Array} tokens
+	@param {string} condition_prefix
+	@returns {Object} value object
+*/
+function build_value_with_conditionals(tokens, condition_prefix = '') {
+	let index = 0;
+	const parts = [];
+	
+	while (index < tokens.length) {
+		const token = tokens[index];
+		
+		if (token.type === TOKEN_LIQUID && (token.command === COMMAND_IF || token.command === COMMAND_UNLESS)) {
+			const conditional = build_conditional(
+				tokens,
+				index,
+				tokens.length,
+				(tokens, start, end, is_unless, condition) => {
+					const new_condition = is_unless ? `!(${condition})` : condition;
+					const combined_condition = condition_prefix 
+						? `${condition_prefix} && ${new_condition}`
+						: new_condition;
+					
+					// Build the value inside the conditional
+					const inner_tokens = tokens.slice(start, end).filter(t => 
+						t.type !== TOKEN_LIQUID || 
+						(t.command !== COMMAND_ENDIF && t.command !== COMMAND_ENDUNLESS)
+					);
+					
+					if (inner_tokens.length > 0) {
+						const inner_value = build_value(inner_tokens, combined_condition);
+						return { condition: combined_condition, value: inner_value };
+					}
+					return null;
+				}
+			);
+			
+			if (conditional.result) {
+				parts.push(conditional.result);
+			}
+			index = conditional.index;
+		}
+		else if (token.type !== TOKEN_LIQUID) {
+			// Regular text or expression token
+			parts.push({ condition: condition_prefix, value: {
+				type: token.type === TOKEN_TEXT ? VALUE_TYPE_STATIC : VALUE_TYPE_FIELD,
+				data: token.value,
+			}});
+			index++;
+		}
+		else {
+			index++;
+		}
+	}
+	
+	// If all parts have the same condition (or no condition), merge them
+	if (parts.length === 0) {
+		return { type: VALUE_TYPE_STATIC, data: '' };
+	}
+	
+	const first_condition = parts[0].condition;
+	const same_condition = parts.every(p => p.condition === first_condition);
+	
+	if (same_condition && parts.length > 1) {
+		// Merge all values into a string concat
+		const merged_data = parts.map(p => p.value.type === VALUE_TYPE_STRING_CONCAT ? p.value.data : [p.value]).flat();
+		const result = {
+			type: VALUE_TYPE_STRING_CONCAT,
+			data: merged_data,
+		};
+		
+		if (first_condition) {
+			// Wrap in conditional
+			return {
+				type: VALUE_TYPE_FIELD,
+				data: `${first_condition} ? ${generate_value_inline(result)} : ""`,
+			};
+		}
+		return result;
+	}
+	
+	// Multiple different conditions - build complex expression
+	if (parts.length === 1) {
+		if (parts[0].condition) {
+			const value_str = generate_value_inline(parts[0].value);
+			return {
+				type: VALUE_TYPE_FIELD,
+				data: `${parts[0].condition} ? ${value_str} : ""`,
+			};
+		}
+		return parts[0].value;
+	}
+	
+	// Build concatenated string with conditional parts
+	// e.g., "btn " + (isActive ? "active" : "") + " " + (isDisabled ? "disabled" : "")
+	const concat_parts = [];
+	for (const part of parts) {
+		if (part.condition) {
+			const value_str = generate_value_inline(part.value);
+			concat_parts.push({
+				type: VALUE_TYPE_FIELD,
+				data: `(${part.condition} ? ${value_str} : "")`,
+			});
+		}
+		else {
+			concat_parts.push(part.value);
+		}
+	}
+	
+	// If all parts are static, merge into single static value
+	if (concat_parts.every(p => p.type === VALUE_TYPE_STATIC)) {
+		return {
+			type: VALUE_TYPE_STATIC,
+			data: concat_parts.map(p => p.data).join(''),
+		};
+	}
+	
+	// Otherwise, return as string concat
+	return {
+		type: VALUE_TYPE_STRING_CONCAT,
+		data: concat_parts,
+	};
 }
 
 /**

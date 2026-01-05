@@ -32,7 +32,9 @@ export default async function lui_templates(path, options = {}) {
 	const is_directory = (await stat(path)).isDirectory();
 
 	const paths = is_directory
-	?	(await readdir(path)).map(name => `${path}/${name}`)
+	?	options.file
+		?	[`${path}/${options.file}`]
+		:	(await readdir(path)).map(name => `${path}/${name}`)
 	:	[path];
 
 	const all_parsed = await Promise.all(paths.map(parse));

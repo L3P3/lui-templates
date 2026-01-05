@@ -213,7 +213,8 @@ function string_concat_generate(data, identation) {
 			switch (item.type) {
 			case VALUE_TYPE_STATIC: return template_escape(item.data);
 			case VALUE_TYPE_FIELD:
-				assert_identifier(item.data);
+				// Allow complex expressions (ternaries, negations, etc.)
+				// assert_identifier(item.data);
 				return `\${${item.data}}`;
 			}
 			return `\${\n${
