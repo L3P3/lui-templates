@@ -23,7 +23,7 @@ const TOKEN_SCRIPT = 7; // liquid script node
 export default async function parse_liquid(src, path) {
 	const tokenizer = new Tokenizer(src, path);
 	const tokens = tokenizer.parse_nodes();
-	const nodes = nodes_from_tokens(tokens);
+	const nodes = build_nodes(tokens, 0, tokens.length);
 
 	return {
 		inputs: (
@@ -55,7 +55,7 @@ export default async function parse_liquid(src, path) {
 	@param {Object} obj either the Tokenizer or a specific token
 */
 function error(message, obj) {
-	console.error(`Syntax error in ${obj.path}:${obj.line}:${obj.column}: ${message}`);
+	console.error(`Error in ${obj.path}:${obj.line}:${obj.column}: ${message}`);
 	process.exit(1);
 }
 
@@ -91,7 +91,7 @@ class Tokenizer {
 	*/
 	char_step() {
 		const char = this.char_current();
-		if (char == null) this.error('Unexpected end of input');
+		if (char == null) error('Unexpected end of input', this);
 		this.index++;
 		if (char === '\n') {
 			this.line++;
@@ -115,7 +115,7 @@ class Tokenizer {
 		@param {string} chars
 	*/
 	chars_consume(chars) {
-		if (!this.chars_match(chars)) this.error(`Expected "${chars}"`);
+		if (!this.chars_match(chars)) error(`Expected "${chars}"`, this);
 		this.chars_step(chars.length);
 	}
 
@@ -125,20 +125,23 @@ class Tokenizer {
 		@param {string} desc - Description of the context
 	*/
 	chars_consume_until(limit, desc) {
-		const index_start = this.index;
 		const index_end = this.src.indexOf(limit, this.index);
-		if (index_end === -1) this.error(`Unclosed ${desc}`);
-		const content = this.src.slice(index_start, index_end);
+		if (index_end === -1) error(`Unclosed ${desc}`, this);
+		const content = this.src.slice(this.index, index_end);
 		this.chars_step(index_end + limit.length - this.index);
 		return content;
 	}
 
 	/**
-		Handles errors during tokenization.
-		@param {string} message
+		Creates position info for a token.
+		@returns {Object} Position info with path, line, column
 	*/
-	error(message) {
-		error(message, this);
+	position_get() {
+		return {
+			path: this.path,
+			line: this.line,
+			column: this.column,
+		};
 	}
 
 	/**
@@ -174,23 +177,11 @@ class Tokenizer {
 	}
 
 	/**
-		Creates position info for a token.
-		@returns {Object} Position info with path, line, column
-	*/
-	token_position() {
-		return {
-			path: this.path,
-			line: this.line,
-			column: this.column,
-		};
-	}
-
-	/**
-		Parses a html start tag, including (dynamic) tag name and attributes.
+		Parses a html start tag.
 		@returns {Object} Token
 	*/
 	parse_html_start() {
-		const position = this.token_position();
+		const position = this.position_get();
 		this.chars_consume('<');
 		const tag_name = this.parse_tag_name();
 		const attributes = this.parse_attributes();
@@ -205,11 +196,11 @@ class Tokenizer {
 	}
 
 	/**
-		Parses a html end tag.
+		Parses an html end tag.
 		@returns {Object} Token
 	*/
 	parse_html_end() {
-		const position = this.token_position();
+		const position = this.position_get();
 		this.chars_consume('</');
 		const tag_name = this.parse_tag_name();
 		this.chars_consume('>');
@@ -227,7 +218,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_liquid(must_yield) {
-		const position = this.token_position();
+		const position = this.position_get();
 		// TODO (low priority): allow and store - at begin or end of liquid tags in the token so later, the whitespace can be removed/added to surrounding text nodes
 		if (this.chars_match('{% comment')) {
 			this.chars_consume_until('endcomment %}', 'liquid comment');
@@ -252,11 +243,11 @@ class Tokenizer {
 		}
 		if (this.chars_match('{% for')) {
 			// later, lists might be allowed inside html attributes too
-			if (must_yield) this.error('Unexpected liquid loop');
+			if (must_yield) error('Unexpected liquid loop', this);
 			return this.parse_liquid_loop();
 		}
 		if (this.chars_match('{%')) {
-			if (must_yield) this.error('Unexpected liquid script');
+			if (must_yield) error('Unexpected liquid script', this);
 			return this.parse_liquid_script();
 		}
 		// this is not a liquid tag!
@@ -286,18 +277,18 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_liquid_conditional() {
-		const position = this.token_position();
+		const position = this.position_get();
 		const is_unless = this.chars_match('{% unless');
 		const start_tag = is_unless ? '{% unless' : '{% if';
 		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
-		
+
 		this.chars_consume(start_tag);
-		
+
 		// Parse the condition expression
 		const condition_expr = this.chars_consume_until('%}', 'liquid conditional');
 		const condition_var = condition_expr.trim();
 		this.variables.set(condition_var, null);
-		
+
 		// Parse the body of the conditional
 		const body_tokens = [];
 		while (this.index < this.src.length) {
@@ -305,11 +296,11 @@ class Tokenizer {
 				this.chars_consume(end_tag);
 				break;
 			}
-			
+
 			// Parse nodes inside the conditional
 			const char = this.char_current();
 			let token = null;
-			
+
 			if (html_is_whitespace(char)) {
 				this.char_step();
 			}
@@ -324,10 +315,10 @@ class Tokenizer {
 			else {
 				token = this.parse_text();
 			}
-			
+
 			if (token !== null) body_tokens.push(token);
 		}
-		
+
 		return {
 			type: TOKEN_CONDITIONAL,
 			is_unless,
@@ -343,7 +334,7 @@ class Tokenizer {
 	*/
 	parse_liquid_loop() {
 		// For now, we don't support loops in simple templates
-		this.error('Liquid loops are not supported in simple templates');
+		error('Loops are not supported yet', this);
 	}
 
 	/**
@@ -351,7 +342,7 @@ class Tokenizer {
 		@returns {Object} Token
 	*/
 	parse_text() {
-		const position = this.token_position();
+		const position = this.position_get();
 		let text = '';
 		while (this.index < this.src.length) {
 			const char = this.char_current();
@@ -387,18 +378,18 @@ class Tokenizer {
 	*/
 	parse_attributes() {
 		const attributes = [];
-		
+
 		while (this.index < this.src.length) {
 			// Skip whitespace
 			while (html_is_whitespace(this.char_current())) {
 				this.char_step();
 			}
-			
+
 			const char = this.char_current();
 			if (char === '>' || char === '/') break;
-			
-			const position = this.token_position();
-			
+
+			const position = this.position_get();
+
 			// Parse attribute name
 			let name = '';
 			while (this.index < this.src.length) {
@@ -407,24 +398,24 @@ class Tokenizer {
 				name += c;
 				this.char_step();
 			}
-			
+
 			if (!name) break;
-			
+
 			// Skip whitespace after name
 			while (html_is_whitespace(this.char_current())) {
 				this.char_step();
 			}
-			
+
 			// Check for '='
 			let value_tokens = null;
 			if (this.char_current() === '=') {
 				this.char_step();
-				
+
 				// Skip whitespace after '='
 				while (html_is_whitespace(this.char_current())) {
 					this.char_step();
 				}
-				
+
 				// Parse attribute value
 				const quote = this.char_current();
 				if (quote === '"' || quote === "'") {
@@ -433,10 +424,10 @@ class Tokenizer {
 					this.chars_consume(quote);
 				}
 				else {
-					this.error('Expected quoted attribute value');
+					error('Expected quoted attribute value', this);
 				}
 			}
-			
+
 			attributes.push({
 				type: TOKEN_ATTRIBUTE,
 				name: html_attr_to_dom(name),
@@ -444,7 +435,7 @@ class Tokenizer {
 				...position,
 			});
 		}
-		
+
 		return attributes;
 	}
 
@@ -456,13 +447,13 @@ class Tokenizer {
 	parse_attribute_value(quote) {
 		const tokens = [];
 		let text = '';
-		let text_position = this.token_position();
-		
+		let text_position = this.position_get();
+
 		while (this.index < this.src.length) {
 			const char = this.char_current();
-			
+
 			if (char === quote) break;
-			
+
 			if (char === '{' && this.chars_match('{{')) {
 				// Save accumulated text
 				if (text) {
@@ -473,9 +464,9 @@ class Tokenizer {
 					});
 					text = '';
 				}
-				
+
 				// Parse liquid expression
-				const expr_position = this.token_position();
+				const expr_position = this.position_get();
 				this.chars_consume('{{');
 				const expression = this.chars_consume_until('}}', 'liquid expression');
 				const varName = expression.trim();
@@ -485,14 +476,14 @@ class Tokenizer {
 					value: varName,
 					...expr_position,
 				});
-				text_position = this.token_position();
+				text_position = this.position_get();
 			}
 			else {
 				text += char;
 				this.char_step();
 			}
 		}
-		
+
 		// Add remaining text
 		if (text) {
 			tokens.push({
@@ -501,363 +492,264 @@ class Tokenizer {
 				...text_position,
 			});
 		}
-		
+
 		return tokens.length === 0 ? null : tokens;
 	}
 }
 
 /**
-	Converts an array of tokens into an optimized tree of nodes.
-	@param {Array} tokens - Array of tokens to convert
-	@returns {Array} Array of Nodes
+	Build nodes from a token range.
+	@param {Array} tokens
+	@param {number} index start
+	@param {number} index_end (exclusive)
+	@returns {Array} nodes
 */
-function nodes_from_tokens(tokens) {
-	return build_nodes_from_tokens(tokens, 0, tokens.length).nodes;
-}
-
-/**
-	Helper function to build nodes from a token range.
-	This consolidates the logic for both root-level and nested parsing.
-	@param {Array} tokens - Array of all tokens
-	@param {number} startIndex - Starting index
-	@param {number} endIndex - Ending index (exclusive)
-	@returns {Object} Object with nodes array and nextIndex
-*/
-function build_nodes_from_tokens(tokens, startIndex, endIndex) {
+function build_nodes(tokens, index, index_end) {
 	const nodes = [];
-	let i = startIndex;
-	
-	while (i < endIndex) {
-		const token = tokens[i];
-		
-		if (token.type === TOKEN_HTML_START) {
-			const node = build_element_node(tokens, i);
+
+	while (index < index_end) {
+		const token = tokens[index];
+
+		switch (token.type) {
+		case TOKEN_HTML_START: {
+			const node = build_element_node(tokens, index);
 			nodes.push(node.element);
-			i = node.nextIndex;
+			index = node.index;
+			continue;
 		}
-		else if (token.type === TOKEN_HTML_END) {
-			// End tag without matching start
+		case TOKEN_HTML_END:
 			error(`Unexpected closing tag </${token.tag_name}>`, token);
-		}
-		else if (token.type === TOKEN_TEXT || token.type === TOKEN_EXPRESSION) {
-			// Collect consecutive text and expression tokens to merge them
-			const textTokens = [];
-			while (i < endIndex && (tokens[i].type === TOKEN_TEXT || tokens[i].type === TOKEN_EXPRESSION)) {
-				textTokens.push(tokens[i]);
-				i++;
+		case TOKEN_TEXT:
+		case TOKEN_EXPRESSION: {
+			// merge text and expression tokens
+			const merge_list = [];
+			for (; index < index_end; index++) {
+				const token = tokens[index];
+				if (
+					token.type !== TOKEN_TEXT &&
+					token.type !== TOKEN_EXPRESSION
+				) break;
+				merge_list.push(token);
 			}
-			
-			// Build a single span with concatenated innerText
-			const innerTextValue = build_value_from_tokens(textTokens);
-			if (innerTextValue) {
+
+			// as lui does not allow text nodes, create a span
+			const innerText = build_value_trimmed(merge_list);
+			if (innerText) {
 				nodes.push({
 					type: NODE_TYPE_ELEMENT,
 					tag: 'span',
 					props: {
-						innerText: innerTextValue,
+						innerText,
 					},
 					children: [],
 				});
 			}
+			continue;
 		}
-		else if (token.type === TOKEN_CONDITIONAL) {
-			// Build conditional node
-			const child_nodes = build_nodes_from_tokens(token.body, 0, token.body.length).nodes;
-			
-			let child_node;
-			if (child_nodes.length === 1) {
-				child_node = child_nodes[0];
-			}
-			else {
-				// Multiple children - wrap in a span
-				child_node = {
-					type: NODE_TYPE_ELEMENT,
-					tag: 'span',
-					props: {},
-					children: child_nodes,
-				};
-			}
-			
-			// Build the condition value - handle unless by negating
-			let condition;
-			if (token.is_unless) {
-				// For unless, negate the condition with JavaScript
-				condition = {
-					type: VALUE_TYPE_FIELD,
-					data: `!(${token.condition})`,
-				};
-			}
-			else {
-				condition = {
-					type: VALUE_TYPE_FIELD,
-					data: token.condition,
-				};
-			}
-			
+		case TOKEN_CONDITIONAL: {
+			const children = build_nodes(token.body, 0, token.body.length);
+
 			nodes.push({
 				type: NODE_TYPE_IF,
-				condition,
-				child: child_node,
+				condition: {
+					type: VALUE_TYPE_FIELD,
+					data: (
+						token.is_unless
+						?	`!(${token.condition})` // TODO hacky
+						:	token.condition
+					),
+				},
+				child: (
+					children.length === 1
+					?	children[0]
+					:	{ // FIXME instead have multiple if for each child via .map
+						type: NODE_TYPE_ELEMENT,
+						tag: 'span',
+						props: {},
+						children,
+					}
+				),
 			});
-			i++;
 		}
-		else {
-			i++;
 		}
+
+		index++;
 	}
-	
-	return { nodes, nextIndex: i };
+
+	return nodes;
 }
 
 /**
 	Builds an element node from tokens, including its children.
-	@param {Array} tokens - Array of all tokens
-	@param {number} startIndex - Index of the TOKEN_HTML_START
-	@returns {Object} Object with element and nextIndex
+	@param {Array} tokens
+	@param {number} index start
+	@returns {Object} {element, index}
 */
-function build_element_node(tokens, startIndex) {
-	const startToken = tokens[startIndex];
-	const tag = startToken.tag_name;
-	
-	// Build props from attributes
+function build_element_node(tokens, index) {
+	const token_start = tokens[index++];
+
 	const props = {};
-	if (startToken.attributes) {
-		for (const attr of startToken.attributes) {
-			if (attr.value === null) {
-				// Boolean attribute
-				props[attr.name] = {
-					type: VALUE_TYPE_STATIC,
-					data: true,
-				};
-			}
-			else if (attr.value.length === 1 && attr.value[0].type === TOKEN_TEXT) {
-				// Pure static value
-				props[attr.name] = {
-					type: VALUE_TYPE_STATIC,
-					data: attr.value[0].value,
-				};
-			}
-			else if (attr.value.length === 1 && attr.value[0].type === TOKEN_EXPRESSION) {
-				// Pure expression
-				props[attr.name] = {
-					type: VALUE_TYPE_FIELD,
-					data: attr.value[0].value,
-				};
-			}
-			else {
-				// Mixed content - string concatenation
-				const parts = attr.value.map(token => {
-					if (token.type === TOKEN_TEXT) {
-						return {
-							type: VALUE_TYPE_STATIC,
-							data: token.value,
-						};
-					}
-					else {
-						return {
-							type: VALUE_TYPE_FIELD,
-							data: token.value,
-						};
-					}
-				});
-				props[attr.name] = {
-					type: VALUE_TYPE_STRING_CONCAT,
-					data: parts,
-				};
-			}
-		}
+	if (token_start.attributes)
+	for (const attr of token_start.attributes) {
+		props[attr.name] = (
+			attr.value === null // boolean
+			?	{type: VALUE_TYPE_STATIC, data: true}
+			:	build_value(attr.value)
+		);
 	}
-	
-	// Check if self-closing
-	const isSelfClosing = html_is_self_closing(tag);
-	
+
 	let children = [];
-	let nextIndex = startIndex + 1;
-	
-	if (!isSelfClosing) {
-		// Find matching end tag and build children
-		const result = build_children(tokens, nextIndex, tag);
-		children = result.children;
-		nextIndex = result.nextIndex;
-	}
-	
-	// If there's only text content, set it as innerText
-	if (children.length === 0 && !props.innerText) {
-		// Check for text content
-		const contentTokens = [];
-		let i = startIndex + 1;
-		while (i < tokens.length) {
-			const token = tokens[i];
-			if (token.type === TOKEN_HTML_END && token.tag_name === tag) {
-				break;
+	if (!html_is_self_closing(token_start.tag_name)) {
+		const index_start = index;
+		({children, index} = build_children(tokens, index, token_start.tag_name));
+
+		text_extract: if (children.length === 0) {
+			const merge_list = [];
+			loop: for (const index = index_start; index < tokens.length; index++) {
+				const token = tokens[index];
+
+				switch (token.type) {
+				case TOKEN_HTML_END:
+					if (token.tag_name === token_start.tag_name) break loop;
+				case TOKEN_HTML_START:
+				case TOKEN_CONDITIONAL:
+					// Has child elements, not pure text
+					break text_extract;
+				}
+
+				merge_list.push(token);
 			}
-			if (token.type === TOKEN_TEXT || token.type === TOKEN_EXPRESSION) {
-				contentTokens.push(token);
-			}
-			else {
-				// Has child elements, not pure text
-				contentTokens.length = 0;
-				break;
-			}
-			i++;
-		}
-		
-		if (contentTokens.length > 0) {
-			props.innerText = build_value_from_tokens(contentTokens);
+
+			const value = build_value_trimmed(merge_list);
+			if (value) props.innerText = value;
 		}
 	}
-	
+
 	return {
 		element: {
 			type: NODE_TYPE_ELEMENT,
-			tag,
+			tag: token_start.tag_name,
 			props,
 			children,
 		},
-		nextIndex,
+		index,
 	};
 }
 
 /**
-	Builds children nodes until the matching end tag is found.
-	@param {Array} tokens - Array of all tokens
-	@param {number} startIndex - Index to start parsing children
-	@param {string} parentTag - Parent tag name to match end tag
-	@returns {Object} Object with children array and nextIndex
+	Builds children nodes before the end tag.
+	@param {Array} tokens
+	@param {number} index start
+	@param {string} tag_parent
+	@returns {Object} {children, index}
 */
-function build_children(tokens, startIndex, parentTag) {
-	const children = [];
-	let i = startIndex;
-	
-	// Collect content tokens until we find the end tag
-	const contentTokens = [];
-	let depth = 1;
-	
-	while (i < tokens.length && depth > 0) {
-		const token = tokens[i];
-		
-		if (token.type === TOKEN_HTML_START && token.tag_name === parentTag) {
-			depth++;
-		}
-		else if (token.type === TOKEN_HTML_END && token.tag_name === parentTag) {
-			depth--;
-			if (depth === 0) {
-				i++; // Skip the end tag
+function build_children(tokens, index, tag_parent) {
+	const content = [];
+
+	let text_only = true;
+	loop: for (let depth = 1; index < tokens.length; index++) {
+		const token = tokens[index];
+
+		switch (token.type) {
+			case TOKEN_HTML_START:
+				if (token.tag_name === tag_parent) depth++;
+			case TOKEN_CONDITIONAL:
+				text_only = false;
 				break;
-			}
+			case TOKEN_HTML_END:
+				text_only = false;
+				if (
+					token.tag_name === tag_parent &&
+					--depth === 0
+				) {
+					// skip the end tag
+					index++;
+					break loop;
+				}
 		}
-		
-		contentTokens.push(token);
-		i++;
+
+		content.push(token);
 	}
-	
-	// Check if content is pure text/expressions (for innerText)
-	const hasElements = contentTokens.some(t => 
-		t.type === TOKEN_HTML_START || t.type === TOKEN_HTML_END || t.type === TOKEN_CONDITIONAL
-	);
-	
-	if (hasElements) {
-		// Use the consolidated build_nodes_from_tokens function
-		const result = build_nodes_from_tokens(contentTokens, 0, contentTokens.length);
-		children.push(...result.nodes);
-	}
-	
+
 	return {
-		children,
-		nextIndex: i,
+		children: (
+			text_only
+			?	[]
+			:	build_nodes(content, 0, content.length)
+		),
+		index,
 	};
 }
 
 /**
-	Builds a value object from text and expression tokens.
-	@param {Array} tokens - Array of TOKEN_TEXT and TOKEN_EXPRESSION
-	@returns {Object} Value object or null if empty
+	Builds a value object out of text and expression tokens.
+	Trims whitespace from the start and end.
+	@param {Array} tokens
+	@returns {Object} value object or null
 */
-function build_value_from_tokens(tokens) {
-	// Don't filter - preserve all text including whitespace
-	// Only skip completely empty tokens at the edges
+function build_value_trimmed(tokens) {
 	const filtered = [];
-	let hasContent = false;
-	
+
+	let empty = true;
 	for (const token of tokens) {
 		if (token.type === TOKEN_EXPRESSION) {
 			filtered.push(token);
-			hasContent = true;
+			empty = false;
 		}
 		else if (token.type === TOKEN_TEXT) {
 			// Keep all text, even whitespace, to preserve spacing
 			filtered.push(token);
-			if (token.value.trim()) {
-				hasContent = true;
+			if (token.value.trimStart()) {
+				empty = false;
 			}
 		}
 	}
-	
-	if (!hasContent) {
+	if (empty) {
 		return null;
 	}
-	
-	// Trim only leading and trailing whitespace from the entire sequence
-	// Remove leading whitespace from first token
-	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT) {
-		const trimmed = filtered[0].value.replace(/^\s+/, '');
-		if (trimmed) {
-			filtered[0] = { ...filtered[0], value: trimmed };
-		}
+
+	// remove spaces from start and end
+	if (filtered[0].type === TOKEN_TEXT) {
+		const trimmed = filtered[0].value.trimStart();
+		if (trimmed) filtered[0].value = trimmed;
 		else {
 			filtered.shift();
+			if (filtered.length === 0) return null;
 		}
 	}
-	
-	// Remove trailing whitespace from last token
-	if (filtered.length > 0 && filtered[filtered.length - 1].type === TOKEN_TEXT) {
-		const trimmed = filtered[filtered.length - 1].value.replace(/\s+$/, '');
-		if (trimmed) {
-			filtered[filtered.length - 1] = { ...filtered[filtered.length - 1], value: trimmed };
-		}
+	const last = filtered[filtered.length - 1];
+	if (last.type === TOKEN_TEXT) {
+		const trimmed = last.value.trimEnd();
+		if (trimmed) last.value = trimmed;
 		else {
 			filtered.pop();
+			if (filtered.length === 0) return null;
 		}
 	}
-	
-	if (filtered.length === 0) {
-		return null;
-	}
-	
-	if (filtered.length === 1) {
-		const token = filtered[0];
-		if (token.type === TOKEN_TEXT) {
-			return {
-				type: VALUE_TYPE_STATIC,
-				data: token.value,
-			};
+
+	return build_value(filtered);
+}
+
+/**
+	Builds a value object out of text and expression tokens.
+	@param {Array} tokens
+	@returns {Object}
+*/
+function build_value(tokens) {
+	const values = tokens.map(token => ({
+		type: (
+			token.type === TOKEN_TEXT
+			?	VALUE_TYPE_STATIC
+			:	VALUE_TYPE_FIELD
+		),
+		data: token.value,
+	}));
+	return (
+		values.length === 1
+		?	values[0]
+		:	{
+			type: VALUE_TYPE_STRING_CONCAT,
+			data: values,
 		}
-		else {
-			return {
-				type: VALUE_TYPE_FIELD,
-				data: token.value,
-			};
-		}
-	}
-	
-	// Multiple parts - string concatenation
-	const parts = filtered.map(token => {
-		if (token.type === TOKEN_TEXT) {
-			return {
-				type: VALUE_TYPE_STATIC,
-				data: token.value,
-			};
-		}
-		else {
-			return {
-				type: VALUE_TYPE_FIELD,
-				data: token.value,
-			};
-		}
-	});
-	
-	return {
-		type: VALUE_TYPE_STRING_CONCAT,
-		data: parts,
-	};
+	);
 }

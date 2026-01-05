@@ -124,6 +124,7 @@ function value_generate(value, identation) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
 	case VALUE_TYPE_FIELD:
 		// Allow negation for unless conditionals: !(identifier)
+		// TODO do this with transformations instead
 		const negationMatch = value.data.match(/^!\(([a-zA-Z_$][a-zA-Z0-9_$]*)\)$/);
 		if (negationMatch) {
 			// This is a negated identifier from unless, safe to pass through
