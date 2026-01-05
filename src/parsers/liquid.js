@@ -582,7 +582,10 @@ function build_conditional(tokens, index, index_end, process_body) {
 		if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
 			depth++;
 		}
-		else if (t.command === end_command && --depth <= 0) break;
+		else if ((t.command === COMMAND_ENDIF || t.command === COMMAND_ENDUNLESS) && --depth <= 0) {
+			// Accept any end tag (endif or endunless) when depth reaches 0
+			break;
+		}
 	}
 
 	if (depth > 0) {
@@ -603,9 +606,10 @@ function build_conditional(tokens, index, index_end, process_body) {
 	@param {Array} tokens
 	@param {number} index start
 	@param {number} index_end (exclusive)
+	@param {string} condition_prefix - Optional condition prefix for flattening nested conditionals
 	@returns {Array} nodes
 */
-function build_nodes(tokens, index, index_end) {
+function build_nodes(tokens, index, index_end, condition_prefix = '') {
 	const nodes = [];
 
 	while (index < index_end) {
@@ -614,7 +618,20 @@ function build_nodes(tokens, index, index_end) {
 		switch (token.type) {
 		case TOKEN_HTML_START: {
 			const node = build_element_node(tokens, index);
-			nodes.push(node.element);
+			if (condition_prefix) {
+				// Wrap element in conditional
+				nodes.push({
+					type: NODE_TYPE_IF,
+					condition: {
+						type: VALUE_TYPE_FIELD,
+						data: condition_prefix,
+					},
+					child: node.element,
+				});
+			}
+			else {
+				nodes.push(node.element);
+			}
 			index = node.index;
 			continue;
 		}
@@ -636,14 +653,29 @@ function build_nodes(tokens, index, index_end) {
 			// as lui does not allow text nodes, create a span
 			const innerText = build_value_trimmed(merge_list);
 			if (innerText) {
-				nodes.push({
+				const span_node = {
 					type: NODE_TYPE_ELEMENT,
 					tag: 'span',
 					props: {
 						innerText,
 					},
 					children: [],
-				});
+				};
+				
+				if (condition_prefix) {
+					// Wrap span in conditional
+					nodes.push({
+						type: NODE_TYPE_IF,
+						condition: {
+							type: VALUE_TYPE_FIELD,
+							data: condition_prefix,
+						},
+						child: span_node,
+					});
+				}
+				else {
+					nodes.push(span_node);
+				}
 			}
 			continue;
 		}
@@ -652,27 +684,18 @@ function build_nodes(tokens, index, index_end) {
 			case COMMAND_IF:
 			case COMMAND_UNLESS: {
 				const conditional = build_conditional(tokens, index, index_end, (tokens, start, end, is_unless, condition) => {
-					const children = build_nodes(tokens, start, end);
-					return {
-						type: NODE_TYPE_IF,
-						condition: {
-							type: VALUE_TYPE_FIELD,
-							data: is_unless ? `!(${condition})` : condition,
-						},
-						child: (
-							children.length === 1
-							?	children[0]
-							:	{
-								type: NODE_TYPE_ELEMENT,
-								tag: 'span',
-								props: {},
-								children,
-							}
-						),
-					};
+					const new_condition = is_unless ? `!(${condition})` : condition;
+					const combined_condition = condition_prefix 
+						? `${condition_prefix} && ${new_condition}`
+						: new_condition;
+					
+					// Build children with combined condition - this flattens nested conditionals
+					const children = build_nodes(tokens, start, end, combined_condition);
+					return children;
 				});
 
-				nodes.push(conditional.result);
+				// Add all flattened children
+				nodes.push(...conditional.result);
 				index = conditional.index;
 				continue;
 			}
