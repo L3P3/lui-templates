@@ -1094,7 +1094,7 @@ function build_value_with_conditionals(tokens, condition_prefix = '') {
 			// Wrap in conditional
 			return {
 				type: VALUE_TYPE_FIELD,
-				data: `${first_condition} ? ${generate_value_inline(result)} : ""`,
+				data: `${first_condition} ? ${generate_value_inline(result, { path: 'generated', line: 0, column: 0 })} : ""`,
 			};
 		}
 		return result;
@@ -1103,7 +1103,7 @@ function build_value_with_conditionals(tokens, condition_prefix = '') {
 	// Multiple different conditions - build complex expression
 	if (parts.length === 1) {
 		if (parts[0].condition) {
-			const value_str = generate_value_inline(parts[0].value);
+			const value_str = generate_value_inline(parts[0].value, { path: 'generated', line: 0, column: 0 });
 			return {
 				type: VALUE_TYPE_FIELD,
 				data: `${parts[0].condition} ? ${value_str} : ""`,
@@ -1115,9 +1115,10 @@ function build_value_with_conditionals(tokens, condition_prefix = '') {
 	// Build concatenated string with conditional parts
 	// e.g., "btn " + (isActive ? "active" : "") + " " + (isDisabled ? "disabled" : "")
 	const concat_parts = [];
+	const dummy_pos = { path: 'generated', line: 0, column: 0 };
 	for (const part of parts) {
 		if (part.condition) {
-			const value_str = generate_value_inline(part.value);
+			const value_str = generate_value_inline(part.value, dummy_pos);
 			concat_parts.push({
 				type: VALUE_TYPE_FIELD,
 				data: `(${part.condition} ? ${value_str} : "")`,
