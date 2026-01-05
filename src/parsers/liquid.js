@@ -16,9 +16,28 @@ const TOKEN_HTML_END = 1; // html end tag
 const TOKEN_TEXT = 2; // static text
 const TOKEN_ATTRIBUTE = 3; // html attribute
 const TOKEN_EXPRESSION = 4; // (inline transformed) variable
-const TOKEN_LIQUID_TAG = 5; // generic liquid tag (if/unless/endif/endunless/etc)
-const TOKEN_LOOP = 6; // for node
-const TOKEN_SCRIPT = 7; // liquid script node
+const TOKEN_LIQUID = 5; // generic liquid tag with one of the following commands
+
+const COMMAND_NOP = 0;
+const COMMAND_IF = 1;
+const COMMAND_UNLESS = 2;
+const COMMAND_FOR = 3;
+const COMMAND_ENDIF = 4;
+const COMMAND_ENDUNLESS = 5;
+const COMMAND_ENDFOR = 6;
+
+const command_map = new Map([
+	['if', COMMAND_IF],
+	['unless', COMMAND_UNLESS],
+	['for', COMMAND_FOR],
+	['endif', COMMAND_ENDIF],
+	['endunless', COMMAND_ENDUNLESS],
+	['endfor', COMMAND_ENDFOR],
+]);
+const command_map_reverse = new Map(
+	Array.from(command_map.entries())
+	.map(([key, value]) => [value, key])
+);
 
 export default async function parse_liquid(src, path) {
 	const tokenizer = new Tokenizer(src, path);
@@ -127,9 +146,9 @@ class Tokenizer {
 	chars_consume_until(limit, desc) {
 		const index_end = this.src.indexOf(limit, this.index);
 		if (index_end === -1) error(`Unclosed ${desc}`, this);
-		const content = this.src.slice(this.index, index_end);
+		const value = this.src.slice(this.index, index_end);
 		this.chars_step(index_end + limit.length - this.index);
-		return content;
+		return value;
 	}
 
 	/**
@@ -173,7 +192,7 @@ class Tokenizer {
 				else token = this.parse_html_start();
 			}
 			else if (char === '{') {
-				token = this.parse_liquid(false);
+				token = this.parse_liquid();
 			}
 			else {
 				token = this.parse_text();
@@ -198,9 +217,11 @@ class Tokenizer {
 
 		return {
 			type: TOKEN_HTML_START,
+			...position,
+			trim_before: false,
+			trim_after: false,
 			tag_name,
 			attributes,
-			...position,
 		};
 	}
 
@@ -216,115 +237,147 @@ class Tokenizer {
 
 		return {
 			type: TOKEN_HTML_END,
-			tag_name,
 			...position,
+			trim_before: false,
+			trim_after: false,
+			tag_name,
 		};
 	}
 
 	/**
 		Parses a liquid block.
-		@param {boolean} must_yield - Whether the block must yield a (single) value
 		@returns {Object} Token
 	*/
-	parse_liquid(must_yield) {
+	parse_liquid() {
 		const position = this.position_get();
-		if (this.chars_match('{{')) {
-			this.chars_consume('{{');
-			let expression = this.chars_consume_until('}}', 'liquid expression');
-			const trim_before = expression.startsWith('-');
-			const trim_after = expression.endsWith('-');
-			expression = expression.slice(
-				trim_before ? 1 : 0,
-				trim_after ? -1 : undefined
-			).trim();
+		const is_expression = this.chars_match('{{');
+
+		if (
+			!is_expression &&
+			!this.chars_match('{%')
+		) {
+			// this is not a liquid tag!
+			this.char_step();
+			return {
+				type: TOKEN_TEXT,
+				...position,
+				trim_before: false,
+				trim_after: false,
+				value: '{',
+			};
+		}
+
+		this.chars_consume('{');
+		this.chars_step(); // skip { or %
+
+		let value = (
+			is_expression
+			?	this.chars_consume_until('}}', 'liquid expression')
+			:	this.chars_consume_until('%}', 'liquid tag')
+		);
+		const trim_before = value.startsWith('-');
+		const trim_after = value.endsWith('-');
+		value = value.slice(
+			trim_before ? 1 : 0,
+			trim_after ? -1 : undefined
+		).trim();
+
+		if (is_expression) {
 			// TODO: see if it is really just a variable or includes pipes
-			this.variables.set(expression, null);
+			this.variables.set(value, null);
 			return {
 				type: TOKEN_EXPRESSION,
-				value: expression,
+				...position,
 				trim_before,
 				trim_after,
-				...position,
+				value,
 			};
 		}
-		if (this.chars_match('{%')) {
-			this.chars_consume('{%');
-			let trim_before = false;
-			if (this.chars_match('-')) {
-				trim_before = true;
-				this.char_step();
-			}
-			this.chars_skip_whitespace();
 
-			if (this.chars_match('comment')) {
-				this.chars_consume_until('endcomment', 'liquid comment');
-				const rest = this.chars_consume_until('%}', 'liquid tag');
-				return {
-					type: TOKEN_SCRIPT,
-					content: '',
-					trim_before,
-					trim_after: rest.endsWith('-'),
-					...position,
-				};
-			}
+		// liquid tag
+		const [command_str, ...args] = value.split(' ');
+		value = args.join(' ').trimStart();
 
-			// Parse generic liquid tag
-			let command = '';
-			while (this.index < this.src.length) {
-				const char = this.char_current();
-				if (html_is_whitespace(char) || this.chars_match('%}')) break;
-				command += char;
-				this.char_step();
-			}
-
-			this.chars_skip_whitespace();
-			
-			// Get rest of content until %}
-			let content = this.chars_consume_until('%}', 'liquid tag');
-			const trim_after = content.endsWith('-');
-			content = content.slice(0, trim_after ? -1 : undefined).trimEnd();
-
-			// Track variables if this is a condition
-			if (command === 'if' || command === 'unless') {
-				this.variables.set(content, null);
-			}
-
+		switch (command_str) {
+		case 'comment':
+			this.chars_consume_until('endcomment', 'liquid comment');
 			return {
-				type: TOKEN_LIQUID_TAG,
-				command,
-				content,
+				type: TOKEN_LIQUID,
+				...position,
+				trim_before,
+				trim_after: this.chars_consume_until('%}', 'liquid tag').endsWith('-'),
+				command: COMMAND_NOP,
+				value: '',
+			};
+		case 'echo':
+			// TODO: see if it is really just a variable or includes pipes
+			this.variables.set(value, null);
+			return {
+				type: TOKEN_EXPRESSION,
+				...position,
 				trim_before,
 				trim_after,
+				value,
+			};
+		case 'raw': {
+			const position = this.position_get();
+			let value = this.chars_consume_until('endraw', 'liquid raw');
+			if (trim_after) value = value.trimStart();
+			const index_end_braces = value.lastIndexOf('{%');
+			if (index_end_braces === -1) error(`Unclosed liquid raw`, position);
+			const trim_after_2 = value.charAt(index_end_braces + 2) === '-';
+			value = value.slice(0, index_end_braces);
+			if (trim_after_2) value = value.trimEnd();
+			return {
+				type: TOKEN_TEXT,
 				...position,
+				trim_before,
+				trim_after: this.chars_consume_until('%}', 'liquid tag').endsWith('-'),
+				value,
 			};
 		}
+		}
 
-		// this is not a liquid tag!
-		this.char_step();
+		const command = command_map.get(command_str);
+		if (command == null) error(`Unsupported liquid command: ${command_str}`, position);
+
+		if (
+			command === COMMAND_IF ||
+			command === COMMAND_UNLESS
+		) {
+			// TODO: see if it is really just a variable or includes pipes
+			this.variables.set(value, null);
+		}
+
 		return {
-			type: TOKEN_TEXT,
-			value: '{',
+			type: TOKEN_LIQUID,
 			...position,
+			trim_before,
+			trim_after,
+			command,
+			value,
 		};
 	}
 
 	/**
-		Parses static text content.
+		Parses static text value.
 		@returns {Object} Token
 	*/
 	parse_text() {
 		const position = this.position_get();
-		let text = '';
+		let value = '';
 		while (this.index < this.src.length) {
 			const char = this.char_current();
 			if (char === '<' || char === '{') break;
-			text += char;
+			value += char;
 			this.char_step();
 		}
 		return {
 			type: TOKEN_TEXT,
-			value: text,
 			...position,
+			trim_before: false,
+			trim_after: false,
+			value,
 		};
 	}
 
@@ -361,7 +414,7 @@ class Tokenizer {
 
 			// Check for liquid tag (including conditionals)
 			if (char === '{' && this.chars_match('{%')) {
-				const liquid_tag = this.parse_liquid(false);
+				const liquid_tag = this.parse_liquid();
 				// Store liquid tag directly - it will be processed in build phase
 				attributes.push(liquid_tag);
 				continue;
@@ -407,19 +460,21 @@ class Tokenizer {
 					value_tokens = [];
 					let text = '';
 					const text_position = this.position_get();
-					
+
 					while (this.index < this.src.length) {
 						const c = this.char_current();
 						if (html_is_whitespace(c) || c === '>' || c === '/') break;
 						text += c;
 						this.char_step();
 					}
-					
+
 					if (text) {
 						value_tokens.push({
 							type: TOKEN_TEXT,
-							value: text,
 							...text_position,
+							trim_before: false,
+							trim_after: false,
+							value: text,
 						});
 					}
 				}
@@ -427,9 +482,11 @@ class Tokenizer {
 
 			attributes.push({
 				type: TOKEN_ATTRIBUTE,
+				...position,
+				trim_before: false,
+				trim_after: false,
 				name: html_attr_to_dom(name),
 				value: value_tokens,
-				...position,
 			});
 		}
 
@@ -456,8 +513,10 @@ class Tokenizer {
 				if (text) {
 					tokens.push({
 						type: TOKEN_TEXT,
-						value: text,
 						...text_position,
+						trim_before: false,
+						trim_after: false,
+						value: text,
 					});
 					text = '';
 				}
@@ -470,8 +529,10 @@ class Tokenizer {
 				this.variables.set(varName, null);
 				tokens.push({
 					type: TOKEN_EXPRESSION,
-					value: varName,
 					...expr_position,
+					trim_before: false,
+					trim_after: false,
+					value: varName,
 				});
 				text_position = this.position_get();
 			}
@@ -485,8 +546,10 @@ class Tokenizer {
 		if (text) {
 			tokens.push({
 				type: TOKEN_TEXT,
-				value: text,
 				...text_position,
+				trim_before: false,
+				trim_after: false,
+				value: text,
 			});
 		}
 
@@ -543,38 +606,37 @@ function build_nodes(tokens, index, index_end) {
 			}
 			continue;
 		}
-		case TOKEN_LIQUID_TAG: {
-			// Handle liquid tags in build phase
-			const command = token.command;
-			
-			if (command === 'if' || command === 'unless') {
-				// Build conditional node
-				const is_unless = command === 'unless';
-				const condition = token.content;
-				const end_tag = is_unless ? 'endunless' : 'endif';
-				
-				// Find matching end tag
+		case TOKEN_LIQUID:
+			switch (token.command) {
+			case COMMAND_IF:
+			case COMMAND_UNLESS: {
+				const is_unless = token.command === COMMAND_UNLESS;
+				const condition = token.value;
+				const end_command = is_unless ? COMMAND_ENDUNLESS : COMMAND_ENDIF;
+
+				// find matching end tag
 				let depth = 1;
 				let body_end = index + 1;
 				for (; body_end < index_end; body_end++) {
 					const t = tokens[body_end];
-					if (t.type === TOKEN_LIQUID_TAG) {
-						if (t.command === 'if' || t.command === 'unless') {
-							depth++;
-						} else if (t.command === end_tag) {
-							depth--;
-							if (depth === 0) break;
-						}
+					if (t.type !== TOKEN_LIQUID) continue;
+
+					if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
+						depth++;
 					}
+					else if (
+						t.command === end_command &&
+						--depth <= 0
+					) break;
 				}
-				
+
 				if (depth > 0) {
-					error(`Unclosed ${command} block`, token);
+					error(`Unclosed ${command_map_reverse.get(token.command)} block`, token);
 				}
-				
+
 				// Build children from body
 				const children = build_nodes(tokens, index + 1, body_end);
-				
+
 				nodes.push({
 					type: NODE_TYPE_IF,
 					condition: {
@@ -596,17 +658,19 @@ function build_nodes(tokens, index, index_end) {
 						}
 					),
 				});
-				
+
 				// Skip past the end tag
 				index = body_end + 1;
 				continue;
-			} else if (command === 'endif' || command === 'endunless') {
-				// End tags are handled by the if/unless logic above
-				// If we reach here, it's an unmatched end tag
-				error(`Unexpected ${command} without matching opening tag`, token);
 			}
-			// Other liquid tags are ignored or handled elsewhere
-		}
+			case COMMAND_ENDIF:
+			case COMMAND_ENDUNLESS:
+			case COMMAND_ENDFOR:
+				// end tags are handled by the if/unless logic above
+				error(`Unexpected ${command_map_reverse.get(token.command)} without matching opening tag`, token);
+			}
+			default:
+				error(`Unexpected liquid tag ${command_map_reverse.get(token.command)}`, token);
 		}
 
 		index++;
@@ -625,135 +689,98 @@ function build_element_node(tokens, index) {
 	const token_start = tokens[index++];
 
 	const props = {};
-	if (token_start.attributes) {
-		let attr_index = 0;
-		while (attr_index < token_start.attributes.length) {
-			const attr = token_start.attributes[attr_index];
-			
-			if (attr.type === TOKEN_LIQUID_TAG) {
-				// Handle conditional liquid tags in attributes
-				const command = attr.command;
-				
-				if (command === 'if' || command === 'unless') {
-					const is_unless = command === 'unless';
-					const condition = attr.content;
-					const end_tag = is_unless ? 'endunless' : 'endif';
-					
-					// Find the matching end tag and collect attributes in between
-					let depth = 1;
-					let body_end = attr_index + 1;
-					const body_attrs = [];
-					
-					for (; body_end < token_start.attributes.length; body_end++) {
-						const t = token_start.attributes[body_end];
-						if (t.type === TOKEN_LIQUID_TAG) {
-							if (t.command === 'if' || t.command === 'unless') {
-								depth++;
-								// Don't add nested conditionals to body_attrs
-							} else if (t.command === end_tag) {
-								depth--;
-								if (depth === 0) {
-									// Found matching end tag, stop
-									break;
-								}
-							}
-						} else if (depth === 1 && t.type === TOKEN_ATTRIBUTE) {
-							// Only collect attributes at depth 1 (direct children)
-							body_attrs.push(t);
-						}
-					}
-					
-					// Check if we found the end tag
-					if (body_end >= token_start.attributes.length) {
-						// Didn't find matching end tag
-						error(`Unclosed ${command} block in attributes`, attr);
-					}
-					
-					// Process the attributes inside the conditional
-					for (const body_attr of body_attrs) {
-						const attr_name = body_attr.name;
-						const is_boolean = body_attr.value === null; // Boolean if no = sign
-						
-						if (is_boolean) {
-							// Boolean attribute: set to condition or inverted condition
-							if (is_unless) {
-								props[attr_name] = {
-									type: VALUE_TYPE_FIELD,
-									data: `!(${condition})`,
-								};
-							} else {
-								props[attr_name] = {
-									type: VALUE_TYPE_FIELD,
-									data: condition,
-								};
-							}
-						} else {
-							// Non-boolean attribute: use ternary operator
-							const value = build_value(body_attr.value);
-							
-							// Create ternary: condition ? value : ""
-							// For unless, swap the order: condition ? "" : value
-							if (is_unless) {
-								// unless: if condition is false, use value, else empty string
-								if (value.type === VALUE_TYPE_STATIC) {
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? "" : ${JSON.stringify(value.data)}`,
-									};
-								} else if (value.type === VALUE_TYPE_FIELD) {
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? "" : ${value.data}`,
-									};
-								} else {
-									// STRING_CONCAT - need to generate the template literal
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? "" : (${generate_value_inline(value)})`,
-									};
-								}
-							} else {
-								// if: if condition is true, use value, else empty string
-								if (value.type === VALUE_TYPE_STATIC) {
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? ${JSON.stringify(value.data)} : ""`,
-									};
-								} else if (value.type === VALUE_TYPE_FIELD) {
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? ${value.data} : ""`,
-									};
-								} else {
-									// STRING_CONCAT - need to generate the template literal
-									props[attr_name] = {
-										type: VALUE_TYPE_FIELD,
-										data: `${condition} ? (${generate_value_inline(value)}) : ""`,
-									};
-								}
-							}
-						}
-					}
-					
-					// Skip past the conditional block including the endif/endunless
-					attr_index = body_end + 1;
-					continue;
-				} else if (command === 'endif' || command === 'endunless') {
-					// Skip end tags - they're handled by the opening if/unless
-					attr_index++;
-					continue;
-				}
-			} else if (attr.type === TOKEN_ATTRIBUTE) {
-				// Regular attribute
-				props[attr.name] = (
-					attr.value === null // boolean
-					?	{type: VALUE_TYPE_STATIC, data: true}
-					:	build_value(attr.value)
-				);
-			}
-			
-			attr_index++;
+	if (token_start.attributes)
+	for (let index = 0; index < token_start.attributes.length; index++) {
+		const token = token_start.attributes[index];
+
+		if (token.type === TOKEN_ATTRIBUTE) {
+			props[token.name] = (
+				token.value === null // boolean
+				?	{type: VALUE_TYPE_STATIC, data: true}
+				:	build_value(token.value)
+			);
+			continue;
 		}
+		if (token.type !== TOKEN_LIQUID) error(`Unexpected attribute type ${token.type}`, token);
+
+		// conditional attributes
+		switch (token.command) {
+		case COMMAND_ENDIF:
+		case COMMAND_ENDUNLESS:
+		case COMMAND_ENDFOR:
+			// Skip end tags - they're handled by the opening if/unless
+			break;
+		case COMMAND_IF:
+		case COMMAND_UNLESS: {
+			const is_unless = token.command === COMMAND_UNLESS;
+			const end_command = is_unless ? COMMAND_ENDUNLESS : COMMAND_ENDIF;
+			// skip the conditional
+			index++;
+			// find the end and collect attributes in between
+			const body_attrs = [];
+			for (let depth = 1; index < token_start.attributes.length; index++) {
+				const t = token_start.attributes[index];
+				if (t.type === TOKEN_LIQUID) {
+					if (t.command === COMMAND_IF || t.command === COMMAND_UNLESS) {
+						depth++;
+					}
+					else if (
+						t.command === end_command ||
+						--depth <= 0
+					) break;
+				}
+				else if (depth === 1 && t.type === TOKEN_ATTRIBUTE) {
+					body_attrs.push(t);
+				}
+			}
+			// check if we missed the end command
+			if (index >= token_start.attributes.length) {
+				error(`Unclosed ${command_map_reverse.get(token.command)} block in attributes`, token);
+			}
+
+			const condition = token.value;
+			// attributes inside the conditional
+			for (const body_attr of body_attrs) {
+				if (body_attr.type !== TOKEN_ATTRIBUTE) {
+					error('Nested conditionals in attributes not supported yet.', body_attr);
+				}
+				if (body_attr.value === null) { // boolean
+					props[body_attr.name] = {
+						type: VALUE_TYPE_FIELD,
+						data: (
+							is_unless
+							?	`!(${condition})`
+							:	condition
+						),
+					};
+				}
+				else {
+					const value = build_value(body_attr.value);
+
+					props[body_attr.name] = {
+						type: VALUE_TYPE_FIELD,
+						data: (
+							is_unless
+							?	(
+								value.type === VALUE_TYPE_STATIC
+								?	`${condition} ? "" : ${JSON.stringify(value.data)}`
+								: value.type === VALUE_TYPE_FIELD
+								?	`${condition} ? "" : ${value.data}`
+								: 	`${condition} ? "" : ${generate_value_inline(value, body_attr.value.position)}`
+							)
+							:	(
+								value.type === VALUE_TYPE_STATIC
+								?	`${condition} ? ${JSON.stringify(value.data)} : ""`
+								: value.type === VALUE_TYPE_FIELD
+								?	`${condition} ? ${value.data} : ""`
+								: 	`${condition} ? ${generate_value_inline(value, body_attr.value.position)} : ""`
+							)
+						),
+					};
+				} // else
+			} // for
+		}// case
+		}// switch
 	}
 
 	let children = [];
@@ -769,13 +796,11 @@ function build_element_node(tokens, index) {
 				switch (token.type) {
 				case TOKEN_HTML_END:
 					if (token.tag_name === token_start.tag_name) break loop;
+				case TOKEN_LIQUID:
+					// apart from loops, everything is allowed in text-only
+					if (token.command !== COMMAND_FOR) break;
 				case TOKEN_HTML_START:
-				case TOKEN_LIQUID_TAG:
-					// Check if it's an if/unless (conditionals are not text-only)
-					if (token.command === 'if' || token.command === 'unless') {
-						text_only = false;
-					}
-					// Has child elements, not pure text
+					text_only = false;
 					break text_extract;
 				}
 
@@ -798,24 +823,32 @@ function build_element_node(tokens, index) {
 	};
 }
 
-// Helper to generate value inline for complex expressions
-function generate_value_inline(value) {
-	if (value.type === VALUE_TYPE_STATIC) {
-		return JSON.stringify(value.data);
-	} else if (value.type === VALUE_TYPE_FIELD) {
+/**
+	Helper to generate value inline for complex expressions.
+	Should be removed in future as its hacky af.
+	@param {Object} value
+	@returns {string}
+*/
+function generate_value_inline(value, position) {
+	switch (value.type) {
+	case VALUE_TYPE_FIELD:
 		return value.data;
-	} else if (value.type === VALUE_TYPE_STRING_CONCAT) {
+	case VALUE_TYPE_STATIC:
+		return JSON.stringify(value.data);
+	case VALUE_TYPE_STRING_CONCAT:
 		// Generate template literal
-		const parts = value.data.map(part => {
-			if (part.type === VALUE_TYPE_STATIC) {
-				return part.data.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-			} else {
-				return '${' + part.data + '}';
-			}
-		});
-		return '`' + parts.join('') + '`';
+		return '`' + (
+			value.data.map(part => (
+				part.type === VALUE_TYPE_STATIC
+				?	part.data
+					.replace(/\\/g, '\\\\')
+					.replace(/`/g, '\\`')
+					.replace(/\$/g, '\\$')
+				:	'${' + part.data + '}'
+			)).join('')
+		) + '`';
 	}
-	return 'undefined';
+	error(`Unsupported value type: ${value.type}`, position);
 }
 
 /**
@@ -838,8 +871,8 @@ function build_children(tokens, index, tag_parent) {
 				if (token.tag_name === tag_parent) depth++;
 				text_only = false;
 				break;
-			case TOKEN_LIQUID_TAG:
-				if (token.command === 'if' || token.command === 'unless') {
+			case TOKEN_LIQUID:
+				if (token.command === COMMAND_IF || token.command === COMMAND_UNLESS) {
 					text_only = false;
 				}
 				break;
@@ -871,6 +904,46 @@ function build_children(tokens, index, tag_parent) {
 		),
 		index,
 	};
+}
+
+/**
+	Builds a value object out of text and expression tokens.
+	@param {Array} tokens
+	@returns {Object}
+*/
+function build_value(tokens) {
+	// liquid trim feature {%- -%}
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index];
+		if (token.type !== TOKEN_TEXT) continue;
+
+		const token_before = tokens[index - 1];
+		const token_after = tokens[index + 1];
+
+		if (token_before != null && token_before.trim_after) {
+			token.value = token.value.trimStart();
+		}
+		if (token_after != null && token_after.trim_before) {
+			token.value = token.value.trimEnd();
+		}
+	}
+
+	const values = tokens.map(token => ({
+		type: (
+			token.type === TOKEN_TEXT
+			?	VALUE_TYPE_STATIC
+			:	VALUE_TYPE_FIELD
+		),
+		data: token.value,
+	}));
+	return (
+		values.length === 1
+		?	values[0]
+		:	{
+			type: VALUE_TYPE_STRING_CONCAT,
+			data: values,
+		}
+	);
 }
 
 /**
@@ -920,28 +993,4 @@ function build_value_trimmed(tokens) {
 	}
 
 	return build_value(filtered);
-}
-
-/**
-	Builds a value object out of text and expression tokens.
-	@param {Array} tokens
-	@returns {Object}
-*/
-function build_value(tokens) {
-	const values = tokens.map(token => ({
-		type: (
-			token.type === TOKEN_TEXT
-			?	VALUE_TYPE_STATIC
-			:	VALUE_TYPE_FIELD
-		),
-		data: token.value,
-	}));
-	return (
-		values.length === 1
-		?	values[0]
-		:	{
-			type: VALUE_TYPE_STRING_CONCAT,
-			data: values,
-		}
-	);
 }
