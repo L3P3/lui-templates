@@ -32,6 +32,7 @@ export default async function parse_liquid(src, path) {
 			.filter(([, value]) => value === null)
 			.map(([name]) => ({ name }))
 		),
+
 		// what variables are derived from other variables via transformations?
 		transformations: [],// TODO
 		// not used for now
@@ -63,10 +64,9 @@ class Tokenizer {
 	constructor(src, path) {
 		this.src = src;
 		this.path = path;
-		this.index = 0;
 		this.line = 1;
 		this.column = 0;
-		this.nodes = [];
+		this.index = 0;
 		this.variables = new Map;
 	}
 
@@ -133,6 +133,15 @@ class Tokenizer {
 	}
 
 	/**
+		Skips whitespace characters.
+	*/
+	chars_skip_whitespace() {
+		while (html_is_whitespace(this.char_current())) {
+			this.char_step();
+		}
+	}
+
+	/**
 		Creates position info for a token.
 		@returns {Object} Position info with path, line, column
 	*/
@@ -146,7 +155,7 @@ class Tokenizer {
 
 	/**
 		Expects to be in either top level or inside a block.
-		@returns {Array} Array of Tokens
+		@returns {Array} Array of tokens
 	*/
 	parse_nodes() {
 		const tokens = [];
@@ -219,37 +228,55 @@ class Tokenizer {
 	*/
 	parse_liquid(must_yield) {
 		const position = this.position_get();
-		// TODO (low priority): allow and store - at begin or end of liquid tags in the token so later, the whitespace can be removed/added to surrounding text nodes
-		if (this.chars_match('{% comment')) {
-			this.chars_consume_until('endcomment %}', 'liquid comment');
-			return null;
-		}
 		if (this.chars_match('{{')) {
 			this.chars_consume('{{');
-			const expression = this.chars_consume_until('}}', 'liquid expression');
-			const varName = expression.trim();
-			this.variables.set(varName, null);
+			let expression = this.chars_consume_until('}}', 'liquid expression');
+			const trim_before = expression.startsWith('-');
+			const trim_after = expression.endsWith('-');
+			expression = expression.slice(
+				trim_before ? 1 : 0,
+				trim_after ? -1 : undefined
+			).trim();
+			// TODO: see if it is really just a variable or includes pipes
+			this.variables.set(expression, null);
 			return {
 				type: TOKEN_EXPRESSION,
-				value: varName,
+				value: expression,
+				trim_before,
+				trim_after,
 				...position,
 			};
 		}
-		if (
-			this.chars_match('{% if') ||
-			this.chars_match('{% unless')
-		) {
-			return this.parse_liquid_conditional();
-		}
-		if (this.chars_match('{% for')) {
-			// later, lists might be allowed inside html attributes too
-			if (must_yield) error('Unexpected liquid loop', this);
-			return this.parse_liquid_loop();
-		}
 		if (this.chars_match('{%')) {
-			if (must_yield) error('Unexpected liquid script', this);
-			return this.parse_liquid_script();
+			this.chars_consume('{%');
+			let trim_before = false;
+			if (this.chars_match('-')) {
+				trim_before = true;
+				this.char_step();
+			}
+			this.chars_skip_whitespace();
+
+			if (this.chars_match('comment')) {
+				const position = this.position_get();
+				this.chars_consume_until('endcomment', 'liquid comment');
+				return {
+					type: TOKEN_SCRIPT,
+					content: '',
+					trim_before,
+					trim_after: this.chars_consume_until('%}', 'liquid tag').endsWith('-'),
+					...position,
+				};
+			}
+			if (
+				this.chars_match('if ') ||
+				this.chars_match('unless ')
+			) {
+				return this.parse_liquid_conditional(trim_before);
+			}
+			// if (must_yield) error('Unexpected liquid script', position);
+			error('Unsupported liquid command', position);
 		}
+
 		// this is not a liquid tag!
 		this.char_step();
 		return {
@@ -260,44 +287,52 @@ class Tokenizer {
 	}
 
 	/**
-		Parses a liquid script tag.
-		Handles stuff like variable assignments inside liquid script tags to have transformed values, other stuff is not supported for now.
-		Returns nothing but defines the variables so that they can later be turned into transformations.
-	*/
-	parse_liquid_script() {
-		this.chars_consume('{%');
-		const content = this.chars_consume_until('%}', 'liquid script');
-		// find variable assignments and store the variables and their definitions
-		// For now, we skip liquid script tags
-		return null;
-	}
-
-	/**
 		Parses a liquid conditional (if/unless) block.
+		@param {boolean} trim_before
 		@returns {Object} Token
 	*/
-	parse_liquid_conditional() {
+	parse_liquid_conditional(trim_before) {
 		const position = this.position_get();
-		const is_unless = this.chars_match('{% unless');
-		const start_tag = is_unless ? '{% unless' : '{% if';
-		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
+		const is_unless = this.chars_match('unless');
+		this.chars_consume(is_unless ? 'unless' : 'if');
+		this.chars_skip_whitespace();
 
-		this.chars_consume(start_tag);
+		// condition expression
+		let condition = this.chars_consume_until('%}', 'liquid tag');
+		let trim_inside_before = condition.endsWith('-');
+		condition = condition.slice(0, trim_inside_before ? -1 : undefined).trimEnd();
+		// TODO: see if it is really just a variable or includes pipes
+		this.variables.set(condition, null);
 
-		// Parse the condition expression
-		const condition_expr = this.chars_consume_until('%}', 'liquid conditional');
-		const condition_var = condition_expr.trim();
-		this.variables.set(condition_var, null);
-
-		// Parse the body of the conditional
-		const body_tokens = [];
+		// body inside conditional
+		// TODO this is ugly, better handle it like html: have tokens for conditionals and conditional ends and match in building phase
+		const end_tag = is_unless ? 'endunless' : 'endif';
+		const body = [];
+		let trim_after = false;
 		while (this.index < this.src.length) {
-			if (this.chars_match(end_tag)) {
-				this.chars_consume(end_tag);
-				break;
+			if (this.chars_match('{%')) {
+				const tag_end_index = this.src.indexOf('%}', this.index);
+				if (tag_end_index === -1) error('Unclosed liquid tag', this);
+				let tag_content = this.src.slice(this.index, tag_end_index);
+				const trim_inside_after = tag_content.startsWith('{%-');
+				trim_after = tag_content.endsWith('-%}');
+				tag_content = tag_content.slice(
+					trim_inside_after ? 3 : 2,
+					trim_after ? -3 : -2
+				).trim();
+				if (tag_content === end_tag) {
+					if (trim_inside_after && body.length > 0) {
+						const last_token = body[body.length - 1];
+						if (last_token.type === TOKEN_TEXT) {
+							last_token.value = last_token.value.trimEnd();
+						}
+					}
+					this.chars_consume_until('%}', 'liquid tag');
+					break;
+				}
 			}
 
-			// Parse nodes inside the conditional
+			// parse nodes inside the conditional
 			const char = this.char_current();
 			let token = null;
 
@@ -314,27 +349,24 @@ class Tokenizer {
 			}
 			else {
 				token = this.parse_text();
+				if (trim_inside_before) {
+					token.value = token.value.trimStart();
+					trim_inside_before = false;
+				}
 			}
 
-			if (token !== null) body_tokens.push(token);
+			if (token !== null) body.push(token);
 		}
 
 		return {
 			type: TOKEN_CONDITIONAL,
 			is_unless,
-			condition: condition_var,
-			body: body_tokens,
+			condition,
+			body,
+			trim_before,
+			trim_after,
 			...position,
 		};
-	}
-
-	/**
-		Parses a liquid loop (for) block.
-		@returns {Object} Token
-	*/
-	parse_liquid_loop() {
-		// For now, we don't support loops in simple templates
-		error('Loops are not supported yet', this);
 	}
 
 	/**
