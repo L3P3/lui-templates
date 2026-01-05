@@ -16,9 +16,10 @@ const TOKEN_HTML_END = 1; // html end tag
 const TOKEN_TEXT = 2; // static text
 const TOKEN_ATTRIBUTE = 3; // html attribute
 const TOKEN_EXPRESSION = 4; // (inline transformed) variable
-const TOKEN_CONDITIONAL = 5; // if/unless node
+const TOKEN_LIQUID_TAG = 5; // generic liquid tag (if/unless/endif/endunless/etc)
 const TOKEN_LOOP = 6; // for node
 const TOKEN_SCRIPT = 7; // liquid script node
+const TOKEN_ATTRIBUTE_CONDITIONAL = 8; // conditional wrapper for attributes
 
 export default async function parse_liquid(src, path) {
 	const tokenizer = new Tokenizer(src, path);
@@ -257,24 +258,46 @@ class Tokenizer {
 			this.chars_skip_whitespace();
 
 			if (this.chars_match('comment')) {
-				const position = this.position_get();
 				this.chars_consume_until('endcomment', 'liquid comment');
+				const rest = this.chars_consume_until('%}', 'liquid tag');
 				return {
 					type: TOKEN_SCRIPT,
 					content: '',
 					trim_before,
-					trim_after: this.chars_consume_until('%}', 'liquid tag').endsWith('-'),
+					trim_after: rest.endsWith('-'),
 					...position,
 				};
 			}
-			if (
-				this.chars_match('if ') ||
-				this.chars_match('unless ')
-			) {
-				return this.parse_liquid_conditional(trim_before);
+
+			// Parse generic liquid tag
+			let tag_name = '';
+			while (this.index < this.src.length) {
+				const char = this.char_current();
+				if (html_is_whitespace(char) || this.chars_match('%}')) break;
+				tag_name += char;
+				this.char_step();
 			}
-			// if (must_yield) error('Unexpected liquid script', position);
-			error('Unsupported liquid command', position);
+
+			this.chars_skip_whitespace();
+			
+			// Get rest of content until %}
+			let content = this.chars_consume_until('%}', 'liquid tag');
+			const trim_after = content.endsWith('-');
+			content = content.slice(0, trim_after ? -1 : undefined).trimEnd();
+
+			// Track variables if this is a condition
+			if (tag_name === 'if' || tag_name === 'unless') {
+				this.variables.set(content, null);
+			}
+
+			return {
+				type: TOKEN_LIQUID_TAG,
+				tag_name,
+				content,
+				trim_before,
+				trim_after,
+				...position,
+			};
 		}
 
 		// this is not a liquid tag!
@@ -282,89 +305,6 @@ class Tokenizer {
 		return {
 			type: TOKEN_TEXT,
 			value: '{',
-			...position,
-		};
-	}
-
-	/**
-		Parses a liquid conditional (if/unless) block.
-		@param {boolean} trim_before
-		@returns {Object} Token
-	*/
-	parse_liquid_conditional(trim_before) {
-		const position = this.position_get();
-		const is_unless = this.chars_match('unless');
-		this.chars_consume(is_unless ? 'unless' : 'if');
-		this.chars_skip_whitespace();
-
-		// condition expression
-		let condition = this.chars_consume_until('%}', 'liquid tag');
-		let trim_inside_before = condition.endsWith('-');
-		condition = condition.slice(0, trim_inside_before ? -1 : undefined).trimEnd();
-		// TODO: see if it is really just a variable or includes pipes
-		this.variables.set(condition, null);
-
-		// body inside conditional
-		// TODO this is ugly, better handle it like html: have tokens for conditionals and conditional ends and match in building phase
-		const end_tag = is_unless ? 'endunless' : 'endif';
-		const body = [];
-		let trim_after = false;
-		while (this.index < this.src.length) {
-			if (this.chars_match('{%')) {
-				const tag_end_index = this.src.indexOf('%}', this.index);
-				if (tag_end_index === -1) error('Unclosed liquid tag', this);
-				let tag_content = this.src.slice(this.index, tag_end_index);
-				const trim_inside_after = tag_content.startsWith('{%-');
-				trim_after = tag_content.endsWith('-%}');
-				tag_content = tag_content.slice(
-					trim_inside_after ? 3 : 2,
-					trim_after ? -3 : -2
-				).trim();
-				if (tag_content === end_tag) {
-					if (trim_inside_after && body.length > 0) {
-						const last_token = body[body.length - 1];
-						if (last_token.type === TOKEN_TEXT) {
-							last_token.value = last_token.value.trimEnd();
-						}
-					}
-					this.chars_consume_until('%}', 'liquid tag');
-					break;
-				}
-			}
-
-			// parse nodes inside the conditional
-			const char = this.char_current();
-			let token = null;
-
-			if (html_is_whitespace(char)) {
-				this.char_step();
-			}
-			else if (char === '<') {
-				if (this.chars_match('<!--')) this.chars_consume_until('-->', 'HTML comment');
-				else if (this.chars_match('</')) token = this.parse_html_end();
-				else token = this.parse_html_start();
-			}
-			else if (char === '{') {
-				token = this.parse_liquid(false);
-			}
-			else {
-				token = this.parse_text();
-				if (trim_inside_before) {
-					token.value = token.value.trimStart();
-					trim_inside_before = false;
-				}
-			}
-
-			if (token !== null) body.push(token);
-		}
-
-		return {
-			type: TOKEN_CONDITIONAL,
-			is_unless,
-			condition,
-			body,
-			trim_before,
-			trim_after,
 			...position,
 		};
 	}
@@ -425,7 +365,7 @@ class Tokenizer {
 				const conditional = this.parse_attribute_conditional();
 				// Store conditional with attributes for later processing
 				attributes.push({
-					type: TOKEN_CONDITIONAL,
+					type: TOKEN_ATTRIBUTE_CONDITIONAL,
 					...conditional,
 				});
 				continue;
@@ -502,20 +442,25 @@ class Tokenizer {
 
 	/**
 		Parses a conditional block inside an attribute context.
-		@returns {Object} Conditional token
+		@returns {Object} Conditional info
 	*/
 	parse_attribute_conditional() {
 		const position = this.position_get();
-		const is_unless = this.chars_match('{% unless');
-		const start_tag = is_unless ? '{% unless' : '{% if';
-		const end_tag = is_unless ? '{% endunless %}' : '{% endif %}';
+		
+		// Parse opening tag ({% if ... %} or {% unless ... %})
+		const open_tag = this.parse_liquid(false);
+		if (open_tag.type !== TOKEN_LIQUID_TAG) {
+			error('Expected liquid tag in attribute conditional', position);
+		}
+		
+		const tag_name = open_tag.tag_name;
+		if (tag_name !== 'if' && tag_name !== 'unless') {
+			error(`Expected if or unless tag, got ${tag_name}`, position);
+		}
 
-		this.chars_consume(start_tag);
-
-		// Parse the condition expression
-		const condition_expr = this.chars_consume_until('%}', 'liquid conditional');
-		const condition_var = condition_expr.trim();
-		this.variables.set(condition_var, null);
+		const is_unless = tag_name === 'unless';
+		const condition = open_tag.content;
+		const end_tag = is_unless ? 'endunless' : 'endif';
 
 		// Parse the body - should contain attributes
 		const body_tokens = [];
@@ -527,9 +472,23 @@ class Tokenizer {
 		
 		// Parse all content until we hit {% endif %} or {% endunless %}
 		while (this.index < this.src.length) {
-			if (this.chars_match(end_tag)) {
-				this.chars_consume(end_tag);
-				break;
+			if (this.chars_match('{%')) {
+				// Check if this is the end tag
+				const saved_index = this.index;
+				const saved_line = this.line;
+				const saved_column = this.column;
+				
+				const tag = this.parse_liquid(false);
+				if (tag.type === TOKEN_LIQUID_TAG && tag.tag_name === end_tag) {
+					// Found the end tag
+					break;
+				}
+				
+				// Not the end tag, restore position and error
+				this.index = saved_index;
+				this.line = saved_line;
+				this.column = saved_column;
+				error('Unexpected liquid tag in attribute conditional', this);
 			}
 
 			// Skip whitespace
@@ -579,7 +538,7 @@ class Tokenizer {
 					const text_position = this.position_get();
 					
 					while (this.index < this.src.length) {
-						if (this.chars_match(end_tag)) break;
+						if (this.chars_match('{%')) break;
 						const c = this.char_current();
 						if (html_is_whitespace(c)) break;
 						text += c;
@@ -607,15 +566,11 @@ class Tokenizer {
 			while (html_is_whitespace(this.char_current())) {
 				this.char_step();
 			}
-			if (this.chars_match(end_tag)) {
-				// Don't consume it here, let the outer loop handle it
-				continue;
-			}
 		}
 
 		return {
 			is_unless,
-			condition: condition_var,
+			condition,
 			body: body_tokens,
 			...position,
 		};
@@ -728,30 +683,69 @@ function build_nodes(tokens, index, index_end) {
 			}
 			continue;
 		}
-		case TOKEN_CONDITIONAL: {
-			const children = build_nodes(token.body, 0, token.body.length);
-
-			nodes.push({
-				type: NODE_TYPE_IF,
-				condition: {
-					type: VALUE_TYPE_FIELD,
-					data: (
-						token.is_unless
-						?	`!(${token.condition})` // TODO hacky
-						:	token.condition
-					),
-				},
-				child: (
-					children.length === 1
-					?	children[0]
-					:	{ // FIXME instead have multiple if for each child via .map
-						type: NODE_TYPE_ELEMENT,
-						tag: 'span',
-						props: {},
-						children,
+		case TOKEN_LIQUID_TAG: {
+			// Handle liquid tags in build phase
+			const tag_name = token.tag_name;
+			
+			if (tag_name === 'if' || tag_name === 'unless') {
+				// Build conditional node
+				const is_unless = tag_name === 'unless';
+				const condition = token.content;
+				const end_tag = is_unless ? 'endunless' : 'endif';
+				
+				// Find matching end tag
+				let depth = 1;
+				let body_end = index + 1;
+				for (; body_end < index_end; body_end++) {
+					const t = tokens[body_end];
+					if (t.type === TOKEN_LIQUID_TAG) {
+						if (t.tag_name === 'if' || t.tag_name === 'unless') {
+							depth++;
+						} else if (t.tag_name === end_tag) {
+							depth--;
+							if (depth === 0) break;
+						}
 					}
-				),
-			});
+				}
+				
+				if (depth > 0) {
+					error(`Unclosed ${tag_name} block`, token);
+				}
+				
+				// Build children from body
+				const children = build_nodes(tokens, index + 1, body_end);
+				
+				nodes.push({
+					type: NODE_TYPE_IF,
+					condition: {
+						type: VALUE_TYPE_FIELD,
+						data: (
+							is_unless
+							?	`!(${condition})`
+							:	condition
+						),
+					},
+					child: (
+						children.length === 1
+						?	children[0]
+						:	{
+							type: NODE_TYPE_ELEMENT,
+							tag: 'span',
+							props: {},
+							children,
+						}
+					),
+				});
+				
+				// Skip past the end tag
+				index = body_end + 1;
+				continue;
+			} else if (tag_name === 'endif' || tag_name === 'endunless') {
+				// End tags are handled by the if/unless logic above
+				// If we reach here, it's an unmatched end tag
+				error(`Unexpected ${tag_name} without matching opening tag`, token);
+			}
+			// Other liquid tags are ignored or handled elsewhere
 		}
 		}
 
@@ -773,7 +767,7 @@ function build_element_node(tokens, index) {
 	const props = {};
 	if (token_start.attributes)
 	for (const attr of token_start.attributes) {
-		if (attr.type === TOKEN_CONDITIONAL) {
+		if (attr.type === TOKEN_ATTRIBUTE_CONDITIONAL) {
 			// Conditional wrapping attributes
 			// Process attributes inside the conditional body
 			for (const body_token of attr.body) {
@@ -866,7 +860,11 @@ function build_element_node(tokens, index) {
 				case TOKEN_HTML_END:
 					if (token.tag_name === token_start.tag_name) break loop;
 				case TOKEN_HTML_START:
-				case TOKEN_CONDITIONAL:
+				case TOKEN_LIQUID_TAG:
+					// Check if it's an if/unless (conditionals are not text-only)
+					if (token.tag_name === 'if' || token.tag_name === 'unless') {
+						text_only = false;
+					}
 					// Has child elements, not pure text
 					break text_extract;
 				}
@@ -930,8 +928,10 @@ function build_children(tokens, index, tag_parent) {
 				if (token.tag_name === tag_parent) depth++;
 				text_only = false;
 				break;
-			case TOKEN_CONDITIONAL:
-				text_only = false;
+			case TOKEN_LIQUID_TAG:
+				if (token.tag_name === 'if' || token.tag_name === 'unless') {
+					text_only = false;
+				}
 				break;
 			case TOKEN_HTML_END:
 				if (
