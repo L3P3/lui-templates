@@ -605,8 +605,8 @@ function build_element_node(tokens, index) {
 
 		text_extract: if (children.length === 0) {
 			const merge_list = [];
-			loop: for (const index = index_start; index < tokens.length; index++) {
-				const token = tokens[index];
+			loop: for (let i = index_start; i < tokens.length; i++) {
+				const token = tokens[i];
 
 				switch (token.type) {
 				case TOKEN_HTML_END:
