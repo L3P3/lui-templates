@@ -647,17 +647,19 @@ function build_children(tokens, index, tag_parent) {
 	const content = [];
 
 	let text_only = true;
-	loop: for (let depth = 1; index < tokens.length; index++) {
+	let depth = 1;
+	loop: for (; index < tokens.length; index++) {
 		const token = tokens[index];
 
 		switch (token.type) {
 			case TOKEN_HTML_START:
 				if (token.tag_name === tag_parent) depth++;
+				text_only = false;
+				break;
 			case TOKEN_CONDITIONAL:
 				text_only = false;
 				break;
 			case TOKEN_HTML_END:
-				text_only = false;
 				if (
 					token.tag_name === tag_parent &&
 					--depth === 0
@@ -666,9 +668,15 @@ function build_children(tokens, index, tag_parent) {
 					index++;
 					break loop;
 				}
+				text_only = false;
 		}
 
 		content.push(token);
+	}
+
+	// Check if we exited the loop without finding the closing tag
+	if (depth > 0) {
+		error(`Unclosed tag <${tag_parent}>`, tokens[index - 1] || tokens[0]);
 	}
 
 	return {
