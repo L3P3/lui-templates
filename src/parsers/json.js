@@ -1,4 +1,4 @@
-export default async function parseJSON(src, path) {
+export default async function parse_json(src, path) {
 	const parsed = JSON.parse(src);
 	// that was simple, wasn't it? oh wait, we need to annoy people by enforcing a schema
 	if (parsed.$schema !== 'https://l3p3.de/shr/schema/lui-templates.intermediary.json') {

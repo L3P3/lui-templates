@@ -15,6 +15,7 @@ export function generate(name, parsed, lui_imports, component_imports) {
 	const body = [];
 
 	// TODO: transformations
+	// stuff like `const variable2 = variable1 + 1`
 
 	if (nodes.length === 1 && nodes[0].type === NODE_TYPE_ELEMENT) {
 		const [node] = nodes;
@@ -28,6 +29,7 @@ export function generate(name, parsed, lui_imports, component_imports) {
 	}
 
 	// TODO: effects
+	// stuff like when variable1 is updated, function doSomething is invoked
 
 	if (nodes.length === 0) {
 		body.push('return null;');
@@ -121,7 +123,9 @@ function value_generate(value, identation) {
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
 	case VALUE_TYPE_FIELD:
-		assert_identifier(value.data);
+		// Allow js expressions for unless or ternary conditions
+		// TODO do this with transformations instead
+		// assert_identifier(value.data);
 		return value.data;
 	case VALUE_TYPE_STRING_CONCAT: return string_concat_generate(value.data, identation);
 	}
@@ -131,7 +135,8 @@ function value_generate(value, identation) {
 function childs_generate(nodes, identation, lui_imports, component_imports) {
 	return list_generate(
 		nodes.map(node => node_generate(node, identation, lui_imports, component_imports)),
-		identation
+		identation,
+		true
 	);
 }
 
@@ -208,7 +213,7 @@ function string_concat_generate(data, identation) {
 			switch (item.type) {
 			case VALUE_TYPE_STATIC: return template_escape(item.data);
 			case VALUE_TYPE_FIELD:
-				assert_identifier(item.data);
+				// assert_identifier(item.data);
 				return `\${${item.data}}`;
 			}
 			return `\${\n${
@@ -257,13 +262,15 @@ const regexp_noinline = /[\n:{[(]/;
 	formats an object/array content, braces/brackets not included
 	@param {string[]} entries
 	@param {number} identation
+	@param {boolean} ordered
 	@return {string}
 */
-export function list_generate(entries, identation) {
+export function list_generate(entries, identation, ordered = false) {
 	switch (entries.length) {
 	case 0: return '';
 	case 1:	if (!regexp_noinline.test(entries[0])) return ` ${entries[0]} `;
 	}
+	if (!ordered) entries.sort();
 	identation = '\t'.repeat(identation);
-	return `\n\t${identation + entries.sort().join(',\n\t' + identation)},\n` + identation;
+	return `\n\t${identation + entries.join(',\n\t' + identation)},\n` + identation;
 }

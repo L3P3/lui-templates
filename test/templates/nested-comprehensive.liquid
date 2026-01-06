@@ -1,0 +1,51 @@
+<div>
+  <!-- Test 1: Nested conditionals around nodes -->
+  {% if outerCondition %}
+    {% if innerCondition %}
+      <p>Both conditions true</p>
+      <span>Second element</span>
+    {% endif %}
+  {% endif %}
+
+  <!-- Test 2: Nested conditionals around text nodes -->
+  {% if showText %}
+    {% if emphasize %}
+      Strong text here!
+    {% endif %}
+  {% endif %}
+
+  <!-- Test 3: Triple nesting -->
+  {% if level1 %}
+    {% if level2 %}
+      {% if level3 %}
+        <p>All three levels true</p>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+
+  <!-- Test 4: Mixed if and unless -->
+  {% if enabled %}
+    {% unless disabled %}
+      <button>Click me</button>
+    {% endunless %}
+  {% endif %}
+
+  <!-- Test 5: Regular conditional attributes (should work as before) -->
+  <input {% if isRequired %}required{% endif %} type="text">
+
+  <!-- Test 6: Nested conditionals in attribute values -->
+  <div {% if hasClass %}class="{% if isPrimary %}primary{% endif %} btn"{% endif %}>Button</div>
+
+  <!-- Test 7: Complex nested in attribute value -->
+  <button class="btn {% if isActive %}active{% endif %} {% if isDisabled %}disabled{% endif %}">Multi-class</button>
+
+  <!-- Test 8: Conditional boolean attribute with nested condition -->
+  <button {% if outerCheck %}{% if innerCheck %}disabled{% endif %}{% endif %}>Nested boolean attr</button>
+
+  <!-- Test 9: Text with variables inside nested conditionals -->
+  {% if showGreeting %}
+    {% if showName %}
+      Hello {{ userName }}!
+    {% endif %}
+  {% endif %}
+</div>

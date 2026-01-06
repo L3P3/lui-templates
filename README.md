@@ -10,14 +10,24 @@ Here are some templating languages I think about supporting:
 
 - [ ] [pug](https://pugjs.org/api/getting-started.html)
 - [ ] [Haml](https://haml.info/)
-- [ ] [Liquid](https://shopify.github.io/liquid/)
+- [x] [Liquid](https://shopify.github.io/liquid/) (proof of concept)
 - [ ] [Handlebars](https://handlebarsjs.com/)
 - [ ] [Knockout](https://knockoutjs.com/documentation/introduction.html)
 - [x] Raw JSON (as intermediary format, see test/templates/greeting.json)
 
+## Usage
+
+```sh
+npx lui-templates src/templates/greeting.liquid > src/components/greeting.js
+```
+
+```sh
+npx lui-templates --help
+```
+
 ## Example
 
-###  `src/templates/Greeting.liquid`
+###  `src/templates/greeting.liquid`
 
 ```liquid
 <h1>Hello {{ name }}!</h1>
@@ -28,7 +38,7 @@ Here are some templating languages I think about supporting:
 ```js
 import { init, node } from 'lui';
 
-import Greeting from './generated/Greeting.js';
+import Greeting from './components/greeting.js';
 
 init(() => {
 	return [
@@ -48,7 +58,7 @@ await fs.writeFile('src/generated/Greeting.js', code, 'utf8');
 await bundleApp('src/main.js'); // or whatever
 ```
 
-### `src/generated/Greeting.js` (generated)
+### `src/generated/greeting.js` (generated)
 
 The generated component is looking like this:
 
@@ -66,17 +76,9 @@ export default function Greeting({ name }) {
 }
 ```
 
-You should probably have it in your `.gitignore`.
+You may have it in your `.gitignore` to prevent duplication.
 
 ... And did I mention that this file is generated? 🎉
-
-## Try it out
-
-Clone this repository, enter the directory and run:
-
-```sh
-npm test
-```
 
 ## Interface of `lui_templates(path[, {options}])`
 
@@ -90,7 +92,7 @@ The name of the lui module to import from. Defaults to `lui`.
 
 ### option `components_name`
 
-The name of the module to import unknown components from. Defaults to `./components.js`.
+The name of the module to import unknown components from. Defaults to `./externs.js`.
 
 ### return value
 
