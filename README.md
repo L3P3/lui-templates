@@ -52,8 +52,8 @@ init(() => {
 ```js
 import lui_templates from 'lui-templates';
 
-const code = await lui_templates('src/templates/Greeting.liquid');
-await fs.writeFile('src/generated/Greeting.js', code, 'utf8');
+const code = await lui_templates('src/templates/greeting.liquid');
+await fs.writeFile('src/components/greeting.js', code, 'utf8');
 
 await bundleApp('src/main.js'); // or whatever
 ```
