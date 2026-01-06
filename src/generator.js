@@ -213,10 +213,7 @@ function string_concat_generate(data, identation) {
 			switch (item.type) {
 			case VALUE_TYPE_STATIC: return template_escape(item.data);
 			case VALUE_TYPE_FIELD:
-				// Allow complex expressions but catch obviously invalid ones
-				if (item.data.includes('`') || item.data.includes('\\')) {
-					throw new SyntaxError(`Potentially unsafe expression in template: ${item.data}`);
-				}
+				// assert_identifier(item.data);
 				return `\${${item.data}}`;
 			}
 			return `\${\n${

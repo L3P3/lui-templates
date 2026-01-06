@@ -21,7 +21,7 @@ const version = JSON.parse(
 
 const options_default = {
 	lui_name: 'lui',
-	components_name: './components.js',
+	components_name: './externs.js',
 };
 
 export default async function lui_templates(path, options = {}) {
@@ -32,9 +32,7 @@ export default async function lui_templates(path, options = {}) {
 	const is_directory = (await stat(path)).isDirectory();
 
 	const paths = is_directory
-	?	options.file
-		?	[`${path}/${options.file}`]
-		:	(await readdir(path)).map(name => `${path}/${name}`)
+	?	(await readdir(path)).map(name => `${path}/${name}`)
 	:	[path];
 
 	const all_parsed = await Promise.all(paths.map(parse));
