@@ -687,8 +687,11 @@ class Tokenizer {
 				
 				const var_expr = args_str.slice(index, end).trim();
 				if (var_expr) {
-					// Register the variable/expression
-					this.variables.set(var_expr, null);
+					// Only register simple identifiers as variables, not complex expressions
+					// Complex expressions like user.name or items[0] are passed through but not treated as inputs
+					if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(var_expr)) {
+						this.variables.set(var_expr, null);
+					}
 				}
 				index = end;
 			}
@@ -1008,8 +1011,8 @@ function build_element_node(tokens, index) {
 				case TOKEN_HTML_END:
 					if (token.tag_name === token_start.tag_name) break loop;
 				case TOKEN_LIQUID:
-					// apart from loops, everything is allowed in text-only
-					if (token.command !== COMMAND_FOR) break;
+					// apart from loops and render commands, everything is allowed in text-only
+					if (token.command !== COMMAND_FOR && token.command !== COMMAND_RENDER) break;
 				case TOKEN_HTML_START:
 					text_only = false;
 					break text_extract;
@@ -1083,7 +1086,7 @@ function build_children(tokens, index, tag_parent) {
 				text_only = false;
 				break;
 			case TOKEN_LIQUID:
-				if (token.command === COMMAND_IF || token.command === COMMAND_UNLESS) {
+				if (token.command === COMMAND_IF || token.command === COMMAND_UNLESS || token.command === COMMAND_RENDER) {
 					text_only = false;
 				}
 				break;
