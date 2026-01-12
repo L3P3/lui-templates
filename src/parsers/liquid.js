@@ -1332,10 +1332,14 @@ function build_render_node(token) {
 	const component_name = path.split('/').pop();
 	if (!component_name) error('Invalid component path in render command', token);
 	
-	// Format component name (capitalize first letter for convention)
+	// Format component name to PascalCase (kebab-case to PascalCase)
+	// e.g., 'user-card' -> 'UserCard', 'button' -> 'Button'
 	const component = (
-		component_name.charAt(0).toUpperCase() +
+		component_name
+		.charAt(0).toUpperCase() +
 		component_name.slice(1)
+		.replace(/-([a-z])/g, (_, char) => char.toUpperCase())
+		.replace(/_([a-z])/g, (_, char) => char.toUpperCase())
 	);
 	
 	// Parse props (key: value pairs)
