@@ -1,4 +1,5 @@
 import {
+	NODE_TYPE_COMPONENT,
 	NODE_TYPE_ELEMENT,
 	NODE_TYPE_IF,
 	VALUE_TYPE_FIELD,
@@ -25,6 +26,7 @@ const COMMAND_FOR = 3;
 const COMMAND_ENDIF = 4;
 const COMMAND_ENDUNLESS = 5;
 const COMMAND_ENDFOR = 6;
+const COMMAND_RENDER = 7;
 
 const command_map = new Map([
 	['if', COMMAND_IF],
@@ -283,6 +285,23 @@ class Tokenizer {
 		).trim();
 
 		if (is_expression) {
+			// Check if this is a render command
+			if (value.startsWith('render ')) {
+				const args_str = value.slice(7).trimStart(); // Remove "render " prefix
+				
+				// Register variables used in render command
+				this.parse_render_variables(args_str, position);
+				
+				return {
+					type: TOKEN_LIQUID,
+					...position,
+					trim_before,
+					trim_after,
+					command: COMMAND_RENDER,
+					value: args_str,
+				};
+			}
+			
 			// TODO: see if it is really just a variable or includes pipes
 			this.variables.set(value, null);
 			return {
@@ -575,6 +594,111 @@ class Tokenizer {
 
 		return tokens.length === 0 ? null : tokens;
 	}
+
+	/**
+		Parses render command arguments and registers any variable names.
+		@param {string} args_str - The arguments string after "render"
+		@param {Object} position - Position info for error reporting
+	*/
+	parse_render_variables(args_str, position) {
+		let index = 0;
+		
+		// Skip the path (first argument)
+		while (index < args_str.length && /\s/.test(args_str[index])) {
+			index++;
+		}
+		
+		const quote_char = args_str[index];
+		if (quote_char === '"' || quote_char === "'") {
+			// Quoted path - skip to closing quote
+			index++;
+			const end_quote = args_str.indexOf(quote_char, index);
+			if (end_quote !== -1) {
+				index = end_quote + 1;
+			}
+		} else {
+			// Unquoted path (could be a variable) - skip identifier
+			const match = args_str.slice(index).match(/^[a-zA-Z_$][a-zA-Z0-9_$]*/);
+			if (match) {
+				index += match[0].length;
+			}
+		}
+		
+		// Skip comma and whitespace
+		while (index < args_str.length && /[\s,]/.test(args_str[index])) {
+			index++;
+		}
+		
+		// Parse key: value pairs and register variables
+		while (index < args_str.length) {
+			// Skip whitespace
+			while (index < args_str.length && /\s/.test(args_str[index])) {
+				index++;
+			}
+			
+			if (index >= args_str.length) break;
+			
+			// Skip the key
+			const key_match = args_str.slice(index).match(/^([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/);
+			if (!key_match) break;
+			index += key_match[0].length;
+			
+			// Skip whitespace after colon
+			while (index < args_str.length && /\s/.test(args_str[index])) {
+				index++;
+			}
+			
+			// Parse value to detect if it's a variable
+			const value_char = args_str[index];
+			if (value_char === '"' || value_char === "'") {
+				// String literal - skip to closing quote
+				index++;
+				const end_quote = args_str.indexOf(value_char, index);
+				if (end_quote !== -1) {
+					index = end_quote + 1;
+				}
+			} else if (/[0-9]/.test(value_char)) {
+				// Number literal - skip
+				const num_match = args_str.slice(index).match(/^[0-9]+(\.[0-9]+)?/);
+				if (num_match) {
+					index += num_match[0].length;
+				}
+			} else if (value_char === 't' && args_str.slice(index, index + 4) === 'true') {
+				// Boolean - skip
+				index += 4;
+			} else if (value_char === 'f' && args_str.slice(index, index + 5) === 'false') {
+				// Boolean - skip
+				index += 5;
+			} else {
+				// Variable or expression - extract and register
+				let end = index;
+				let paren_depth = 0;
+				let bracket_depth = 0;
+				
+				while (end < args_str.length) {
+					const c = args_str[end];
+					if (c === '(') paren_depth++;
+					else if (c === ')') paren_depth--;
+					else if (c === '[') bracket_depth++;
+					else if (c === ']') bracket_depth--;
+					else if (c === ',' && paren_depth === 0 && bracket_depth === 0) break;
+					end++;
+				}
+				
+				const var_expr = args_str.slice(index, end).trim();
+				if (var_expr) {
+					// Register the variable/expression
+					this.variables.set(var_expr, null);
+				}
+				index = end;
+			}
+			
+			// Skip whitespace and comma
+			while (index < args_str.length && /[\s,]/.test(args_str[index])) {
+				index++;
+			}
+		}
+	}
 }
 
 /**
@@ -779,6 +903,26 @@ function build_nodes(tokens, index, index_end, condition_prefix = '') {
 				// Add all flattened children
 				nodes.push(...conditional.result);
 				index = conditional.index;
+				continue;
+			}
+			case COMMAND_RENDER: {
+				const component_node = build_render_node(token);
+				
+				if (condition_prefix) {
+					// Wrap component in conditional
+					nodes.push({
+						type: NODE_TYPE_IF,
+						condition: {
+							type: VALUE_TYPE_FIELD,
+							data: condition_prefix,
+						},
+						child: component_node,
+					});
+				}
+				else {
+					nodes.push(component_node);
+				}
+				index++;
 				continue;
 			}
 			case COMMAND_ENDIF:
@@ -1141,6 +1285,156 @@ function build_value_with_conditionals(tokens, condition_prefix = '') {
 	return {
 		type: VALUE_TYPE_STRING_CONCAT,
 		data: concat_parts,
+	};
+}
+
+/**
+	Parses and builds a component node from a render command token.
+	Format: 'path', key1: value1, key2: value2
+	@param {Object} token - The render command token
+	@returns {Object} Component node
+*/
+function build_render_node(token) {
+	const args_str = token.value;
+	
+	// Parse the component path (first argument, can be quoted)
+	let path = '';
+	let index = 0;
+	
+	// Skip leading whitespace
+	while (index < args_str.length && /\s/.test(args_str[index])) {
+		index++;
+	}
+	
+	// Check if path is quoted
+	const quote_char = args_str[index];
+	if (quote_char === '"' || quote_char === "'") {
+		index++; // Skip opening quote
+		const end_quote = args_str.indexOf(quote_char, index);
+		if (end_quote === -1) error('Unclosed string in render command', token);
+		path = args_str.slice(index, end_quote);
+		index = end_quote + 1;
+	} else {
+		// Unquoted path (variable name)
+		const match = args_str.slice(index).match(/^[a-zA-Z_$][a-zA-Z0-9_$]*/);
+		if (match) {
+			path = match[0];
+			index += path.length;
+		} else {
+			error('Expected path in render command', token);
+		}
+	}
+	
+	// Extract component name from path (only use last part after splitting by '/')
+	const component_name = path.split('/').pop();
+	if (!component_name) error('Invalid component path in render command', token);
+	
+	// Format component name (capitalize first letter for convention)
+	const component = (
+		component_name.charAt(0).toUpperCase() +
+		component_name.slice(1)
+	);
+	
+	// Parse props (key: value pairs)
+	const props = {};
+	
+	// Skip whitespace and comma after path
+	while (index < args_str.length && /[\s,]/.test(args_str[index])) {
+		index++;
+	}
+	
+	// Parse key-value pairs
+	while (index < args_str.length) {
+		// Skip whitespace
+		while (index < args_str.length && /\s/.test(args_str[index])) {
+			index++;
+		}
+		
+		if (index >= args_str.length) break;
+		
+		// Parse key
+		const key_match = args_str.slice(index).match(/^([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/);
+		if (!key_match) {
+			error(`Expected property name in render command at position ${index}`, token);
+		}
+		
+		const key = key_match[1];
+		index += key_match[0].length;
+		
+		// Skip whitespace after colon
+		while (index < args_str.length && /\s/.test(args_str[index])) {
+			index++;
+		}
+		
+		// Parse value (can be string literal, number, or variable name)
+		let value_data = '';
+		let value_type = VALUE_TYPE_FIELD;
+		
+		const value_char = args_str[index];
+		if (value_char === '"' || value_char === "'") {
+			// String literal
+			index++; // Skip opening quote
+			const end_quote = args_str.indexOf(value_char, index);
+			if (end_quote === -1) error('Unclosed string in render prop value', token);
+			value_data = args_str.slice(index, end_quote);
+			value_type = VALUE_TYPE_STATIC;
+			index = end_quote + 1;
+		} else if (/[0-9]/.test(value_char)) {
+			// Number literal
+			const num_match = args_str.slice(index).match(/^[0-9]+(\.[0-9]+)?/);
+			if (num_match) {
+				value_data = parseFloat(num_match[0]);
+				value_type = VALUE_TYPE_STATIC;
+				index += num_match[0].length;
+			}
+		} else if (value_char === 't' && args_str.slice(index, index + 4) === 'true') {
+			// Boolean true
+			value_data = true;
+			value_type = VALUE_TYPE_STATIC;
+			index += 4;
+		} else if (value_char === 'f' && args_str.slice(index, index + 5) === 'false') {
+			// Boolean false
+			value_data = false;
+			value_type = VALUE_TYPE_STATIC;
+			index += 5;
+		} else {
+			// Variable name or expression
+			// Find the end (comma or end of string)
+			let end = index;
+			let paren_depth = 0;
+			let bracket_depth = 0;
+			
+			while (end < args_str.length) {
+				const c = args_str[end];
+				if (c === '(') paren_depth++;
+				else if (c === ')') paren_depth--;
+				else if (c === '[') bracket_depth++;
+				else if (c === ']') bracket_depth--;
+				else if (c === ',' && paren_depth === 0 && bracket_depth === 0) break;
+				end++;
+			}
+			
+			value_data = args_str.slice(index, end).trim();
+			value_type = VALUE_TYPE_FIELD;
+			index = end;
+		}
+		
+		props[key] = {
+			type: value_type,
+			data: value_data,
+		};
+		
+		// Skip whitespace and comma
+		while (index < args_str.length && /[\s,]/.test(args_str[index])) {
+			index++;
+		}
+	}
+	
+	return {
+		type: NODE_TYPE_COMPONENT,
+		component,
+		props,
+		children: [],
 	};
 }
 
