@@ -35,6 +35,7 @@ const command_map = new Map([
 	['endif', COMMAND_ENDIF],
 	['endunless', COMMAND_ENDUNLESS],
 	['endfor', COMMAND_ENDFOR],
+	['render', COMMAND_RENDER],
 ]);
 const command_map_reverse = new Map(
 	Array.from(command_map.entries())
@@ -285,23 +286,6 @@ class Tokenizer {
 		).trim();
 
 		if (is_expression) {
-			// Check if this is a render command
-			if (value.startsWith('render ')) {
-				const args_str = value.slice(7).trimStart(); // Remove "render " prefix
-				
-				// Register variables used in render command
-				this.parse_render_variables(args_str, position);
-				
-				return {
-					type: TOKEN_LIQUID,
-					...position,
-					trim_before,
-					trim_after,
-					command: COMMAND_RENDER,
-					value: args_str,
-				};
-			}
-			
 			// TODO: see if it is really just a variable or includes pipes
 			this.variables.set(value, null);
 			return {
@@ -356,6 +340,18 @@ class Tokenizer {
 				value,
 			};
 		}
+		case 'render':
+			// Register variables used in render command
+			this.parse_render_variables(value, position);
+			
+			return {
+				type: TOKEN_LIQUID,
+				...position,
+				trim_before,
+				trim_after,
+				command: COMMAND_RENDER,
+				value,
+			};
 		}
 
 		const command = command_map.get(command_str);

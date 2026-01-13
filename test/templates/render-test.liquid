@@ -1,7 +1,7 @@
 <div>
-	{{ render 'button', label: 'Click me', color: 'blue' }}
-	{{ render 'components/nested/icon', name: iconName, size: 24 }}
+	{% render 'button', label: 'Click me', color: 'blue' %}
+	{% render 'components/nested/icon', name: iconName, size: 24 %}
 	<p>Some text</p>
-	{{ render 'link', href: url, text: linkText }}
-	{{ render 'card', title: 'Test', enabled: true, count: 5 }}
+	{% render 'link', href: url, text: linkText %}
+	{% render 'card', title: 'Test', enabled: true, count: 5 %}
 </div>
