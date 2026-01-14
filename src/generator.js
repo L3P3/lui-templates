@@ -4,7 +4,6 @@ import {
 	NODE_TYPE_IF,
 	NODE_TYPE_MAP,
 	VALUE_TYPE_FIELD,
-	VALUE_TYPE_NUMBER,
 	VALUE_TYPE_STATIC,
 	VALUE_TYPE_STRING_CONCAT,
 } from './constants.js';
@@ -123,7 +122,6 @@ function props_generate(entries, identation) {
 function value_generate(value, identation) {
 	switch (value.type) {
 	case VALUE_TYPE_STATIC: return JSON.stringify(value.data);
-	case VALUE_TYPE_NUMBER: return String(value.data);
 	case VALUE_TYPE_FIELD:
 		// Allow js expressions for unless or ternary conditions
 		// TODO do this with transformations instead

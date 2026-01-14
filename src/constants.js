@@ -6,4 +6,3 @@ export const NODE_TYPE_MAP = 3;
 export const VALUE_TYPE_STATIC = 0;
 export const VALUE_TYPE_FIELD = 1;
 export const VALUE_TYPE_STRING_CONCAT = 2;
-export const VALUE_TYPE_NUMBER = 3;

@@ -3,7 +3,6 @@ import {
 	NODE_TYPE_ELEMENT,
 	NODE_TYPE_IF,
 	VALUE_TYPE_FIELD,
-	VALUE_TYPE_NUMBER,
 	VALUE_TYPE_STATIC,
 	VALUE_TYPE_STRING_CONCAT,
 } from '../constants.js';
@@ -219,7 +218,7 @@ class Tokenizer {
 				this.char_step();
 			}
 			return {
-				type: VALUE_TYPE_NUMBER,
+				type: VALUE_TYPE_STATIC,
 				data: parseFloat(value),
 			};
 		}
