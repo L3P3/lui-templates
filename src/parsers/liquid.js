@@ -223,40 +223,88 @@ class Tokenizer {
 			};
 		}
 		
-		// Boolean literals
-		if (char === 't' && this.src.slice(this.index, this.index + 4) === 'true') {
-			this.chars_step(4);
+		// Variable name or property access (e.g., variable, variable.prop, variable.prop.subprop)
+		// Also handles boolean literals (true, false) and nil
+		// Only allows valid identifiers separated by dots, no other JavaScript expressions
+		if (/[a-zA-Z_$]/.test(char)) {
+			let value = '';
+			let base_variable = '';
+			let first_identifier = true;
+			
+			while (this.index < this.src.length) {
+				const c = this.char_current();
+				
+				// Start of an identifier
+				if (/[a-zA-Z_$]/.test(c)) {
+					let identifier = '';
+					while (this.index < this.src.length && /[a-zA-Z0-9_$]/.test(this.char_current())) {
+						identifier += this.char_current();
+						this.char_step();
+					}
+					value += identifier;
+					
+					// Track the first identifier as the base variable
+					if (first_identifier) {
+						base_variable = identifier;
+						first_identifier = false;
+					}
+				}
+				// Property access dot
+				else if (c === '.') {
+					// Peek ahead to ensure there's an identifier after the dot
+					if (this.index + 1 < this.src.length && /[a-zA-Z_$]/.test(this.src.charAt(this.index + 1))) {
+						value += c;
+						this.char_step();
+					} else {
+						error('Expected property name after dot', position);
+					}
+				}
+				// Stop at delimiters
+				else if (/[\s,}%)]/.test(c)) {
+					break;
+				}
+				// Invalid character
+				else {
+					error(`Invalid character '${c}' in expression`, position);
+				}
+			}
+			
+			if (!value) {
+				error('Expected expression', position);
+			}
+			
+			// Check for boolean literals and nil
+			if (value === 'true') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: true,
+				};
+			}
+			if (value === 'false') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: false,
+				};
+			}
+			if (value === 'nil') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: null,
+				};
+			}
+			
+			// Register the base variable (not for keywords)
+			if (base_variable) {
+				this.variables.set(base_variable, null);
+			}
+			
 			return {
-				type: VALUE_TYPE_STATIC,
-				data: true,
+				type: VALUE_TYPE_FIELD,
+				data: value,
 			};
 		}
-		if (char === 'f' && this.src.slice(this.index, this.index + 5) === 'false') {
-			this.chars_step(5);
-			return {
-				type: VALUE_TYPE_STATIC,
-				data: false,
-			};
-		}
 		
-		// Variable name or expression (field)
-		let value = '';
-		while (this.index < this.src.length) {
-			const c = this.char_current();
-			// Stop at whitespace, comma, closing braces, or other delimiters
-			if (/[\s,}%)]/.test(c)) break;
-			value += c;
-			this.char_step();
-		}
-		
-		if (!value) {
-			error('Expected expression', position);
-		}
-		
-		return {
-			type: VALUE_TYPE_FIELD,
-			data: value,
-		};
+		error('Expected string, number, or variable', position);
 	}
 
 	/**
@@ -504,12 +552,7 @@ class Tokenizer {
 			// Parse command arguments and store them in the token
 			const args = this.parse_command_arguments(value);
 			
-			// Register simple variable identifiers as inputs
-			for (const [key, val] of Object.entries(args.props)) {
-				if (val.type === VALUE_TYPE_FIELD && /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(val.data)) {
-					this.variables.set(val.data, null);
-				}
-			}
+			// Variable tracking is now handled inside parse_liquid_expression()
 			
 			return {
 				type: TOKEN_LIQUID,
