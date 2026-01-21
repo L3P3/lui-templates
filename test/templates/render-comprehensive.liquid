@@ -1,0 +1,21 @@
+<div>
+	<!-- Simple render with static values -->
+	{% render 'button', label: 'Submit', type: 'primary' %}
+	
+	<!-- Render with variables -->
+	{% render 'input', name: fieldName, value: fieldValue %}
+	
+	<!-- Render with complex expressions -->
+	{% render 'user-card', name: user.name, age: user.age %}
+	
+	<!-- Render with nested paths (only last part is used) -->
+	{% render 'components/ui/icon', name: 'check', size: 24 %}
+	
+	<!-- Render with boolean and number literals -->
+	{% render 'checkbox', checked: true, count: 5 %}
+	
+	<!-- Render within conditionals -->
+	{% if showProfile %}
+		{% render 'profile', user: currentUser %}
+	{% endif %}
+</div>

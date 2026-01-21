@@ -1,4 +1,5 @@
 import {
+	NODE_TYPE_COMPONENT,
 	NODE_TYPE_ELEMENT,
 	NODE_TYPE_IF,
 	VALUE_TYPE_FIELD,
@@ -25,6 +26,7 @@ const COMMAND_FOR = 3;
 const COMMAND_ENDIF = 4;
 const COMMAND_ENDUNLESS = 5;
 const COMMAND_ENDFOR = 6;
+const COMMAND_RENDER = 7;
 
 const command_map = new Map([
 	['if', COMMAND_IF],
@@ -33,6 +35,7 @@ const command_map = new Map([
 	['endif', COMMAND_ENDIF],
 	['endunless', COMMAND_ENDUNLESS],
 	['endfor', COMMAND_ENDFOR],
+	['render', COMMAND_RENDER],
 ]);
 const command_map_reverse = new Map(
 	Array.from(command_map.entries())
@@ -170,6 +173,214 @@ class Tokenizer {
 			line: this.line,
 			column: this.column,
 		};
+	}
+
+	/**
+		Parses a liquid expression (string, number, or variable).
+		Used in {{ }}, command arguments, and other places.
+		@returns {Object} Value object with type and data
+	*/
+	parse_liquid_expression() {
+		const position = this.position_get();
+		
+		// Skip whitespace
+		while (this.index < this.src.length && /\s/.test(this.char_current())) {
+			this.char_step();
+		}
+		
+		const char = this.char_current();
+		
+		// String literal (single or double quoted)
+		if (char === '"' || char === "'") {
+			const quote = char;
+			this.char_step(); // Skip opening quote
+			let value = '';
+			while (this.index < this.src.length) {
+				const c = this.char_current();
+				if (c === quote) {
+					this.char_step(); // Skip closing quote
+					return {
+						type: VALUE_TYPE_STATIC,
+						data: value,
+					};
+				}
+				value += c;
+				this.char_step();
+			}
+			error('Unclosed string literal', position);
+		}
+		
+		// Number literal (base 10 only)
+		if (/[0-9]/.test(char)) {
+			let value = '';
+			while (this.index < this.src.length && /[0-9.]/.test(this.char_current())) {
+				value += this.char_current();
+				this.char_step();
+			}
+			return {
+				type: VALUE_TYPE_STATIC,
+				data: parseFloat(value),
+			};
+		}
+		
+		// Variable name or property access (e.g., variable, variable.prop, variable.prop.subprop)
+		// Also handles boolean literals (true, false) and nil
+		// Only allows valid identifiers separated by dots, no other JavaScript expressions
+		if (/[a-zA-Z_$]/.test(char)) {
+			let value = '';
+			let base_variable = '';
+			let first_identifier = true;
+			
+			while (this.index < this.src.length) {
+				const c = this.char_current();
+				
+				// Start of an identifier
+				if (/[a-zA-Z_$]/.test(c)) {
+					let identifier = '';
+					while (this.index < this.src.length && /[a-zA-Z0-9_$]/.test(this.char_current())) {
+						identifier += this.char_current();
+						this.char_step();
+					}
+					value += identifier;
+					
+					// Track the first identifier as the base variable
+					if (first_identifier) {
+						base_variable = identifier;
+						first_identifier = false;
+					}
+				}
+				// Property access dot
+				else if (c === '.') {
+					// Peek ahead to ensure there's an identifier after the dot
+					if (this.index + 1 < this.src.length && /[a-zA-Z_$]/.test(this.src.charAt(this.index + 1))) {
+						value += c;
+						this.char_step();
+					} else {
+						error('Expected property name after dot', position);
+					}
+				}
+				// Stop at delimiters
+				else if (/[\s,}%)]/.test(c)) {
+					break;
+				}
+				// Invalid character
+				else {
+					error(`Invalid character '${c}' in expression`, position);
+				}
+			}
+			
+			if (!value) {
+				error('Expected expression', position);
+			}
+			
+			// Check for boolean literals and nil
+			if (value === 'true') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: true,
+				};
+			}
+			if (value === 'false') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: false,
+				};
+			}
+			if (value === 'nil') {
+				return {
+					type: VALUE_TYPE_STATIC,
+					data: null,
+				};
+			}
+			
+			// Register the base variable (not for keywords)
+			if (base_variable) {
+				this.variables.set(base_variable, null);
+			}
+			
+			return {
+				type: VALUE_TYPE_FIELD,
+				data: value,
+			};
+		}
+		
+		error('Expected string, number, or variable', position);
+	}
+
+	/**
+		Parses command arguments in the format: arg1, key1: value1, key2: value2
+		Used for render and potentially other commands.
+		@param {string} args_str - The arguments string
+		@returns {Object} Parsed arguments with path and props
+	*/
+	parse_command_arguments(args_str) {
+		const position = this.position_get();
+		const saved_index = this.index;
+		const saved_src = this.src;
+		
+		// Temporarily set src to args_str for parsing
+		this.src = args_str;
+		this.index = 0;
+		
+		const result = {
+			path: null,
+			props: {},
+		};
+		
+		try {
+			// Parse first argument (path)
+			result.path = this.parse_liquid_expression();
+			
+			// Skip whitespace and comma
+			while (this.index < this.src.length && /[\s,]/.test(this.char_current())) {
+				this.char_step();
+			}
+			
+			// Parse key-value pairs
+			while (this.index < this.src.length) {
+				// Skip whitespace
+				while (this.index < this.src.length && /\s/.test(this.char_current())) {
+					this.char_step();
+				}
+				
+				if (this.index >= this.src.length) break;
+				
+				// Parse key
+				const key_start = this.index;
+				while (this.index < this.src.length && /[a-zA-Z_$0-9]/.test(this.char_current())) {
+					this.char_step();
+				}
+				const key = this.src.slice(key_start, this.index);
+				
+				if (!key) break;
+				
+				// Skip whitespace
+				while (this.index < this.src.length && /\s/.test(this.char_current())) {
+					this.char_step();
+				}
+				
+				// Expect colon
+				if (this.char_current() !== ':') {
+					error(`Expected ':' after property name '${key}'`, position);
+				}
+				this.char_step(); // Skip colon
+				
+				// Parse value
+				const value = this.parse_liquid_expression();
+				result.props[key] = value;
+				
+				// Skip whitespace and comma
+				while (this.index < this.src.length && /[\s,]/.test(this.char_current())) {
+					this.char_step();
+				}
+			}
+		} finally {
+			// Restore original src and index
+			this.src = saved_src;
+			this.index = saved_index;
+		}
+		
+		return result;
 	}
 
 	/**
@@ -335,6 +546,21 @@ class Tokenizer {
 				trim_before,
 				trim_after: this.chars_consume_until('%}', 'liquid tag').endsWith('-'),
 				value,
+			};
+		}
+		case 'render': {
+			// Parse command arguments and store them in the token
+			const args = this.parse_command_arguments(value);
+			
+			// Variable tracking is now handled inside parse_liquid_expression()
+			
+			return {
+				type: TOKEN_LIQUID,
+				...position,
+				trim_before,
+				trim_after,
+				command: COMMAND_RENDER,
+				args, // Store parsed arguments instead of raw string
 			};
 		}
 		}
@@ -781,6 +1007,26 @@ function build_nodes(tokens, index, index_end, condition_prefix = '') {
 				index = conditional.index;
 				continue;
 			}
+			case COMMAND_RENDER: {
+				const component_node = build_render_node(token);
+				
+				if (condition_prefix) {
+					// Wrap component in conditional
+					nodes.push({
+						type: NODE_TYPE_IF,
+						condition: {
+							type: VALUE_TYPE_FIELD,
+							data: condition_prefix,
+						},
+						child: component_node,
+					});
+				}
+				else {
+					nodes.push(component_node);
+				}
+				index++;
+				continue;
+			}
 			case COMMAND_ENDIF:
 			case COMMAND_ENDUNLESS:
 			case COMMAND_ENDFOR:
@@ -864,8 +1110,8 @@ function build_element_node(tokens, index) {
 				case TOKEN_HTML_END:
 					if (token.tag_name === token_start.tag_name) break loop;
 				case TOKEN_LIQUID:
-					// apart from loops, everything is allowed in text-only
-					if (token.command !== COMMAND_FOR) break;
+					// apart from loops and render commands, everything is allowed in text-only
+					if (token.command !== COMMAND_FOR && token.command !== COMMAND_RENDER) break;
 				case TOKEN_HTML_START:
 					text_only = false;
 					break text_extract;
@@ -939,7 +1185,7 @@ function build_children(tokens, index, tag_parent) {
 				text_only = false;
 				break;
 			case TOKEN_LIQUID:
-				if (token.command === COMMAND_IF || token.command === COMMAND_UNLESS) {
+				if (token.command === COMMAND_IF || token.command === COMMAND_UNLESS || token.command === COMMAND_RENDER) {
 					text_only = false;
 				}
 				break;
@@ -1141,6 +1387,51 @@ function build_value_with_conditionals(tokens, condition_prefix = '') {
 	return {
 		type: VALUE_TYPE_STRING_CONCAT,
 		data: concat_parts,
+	};
+}
+
+/**
+	Builds a component node from a render command token.
+	@param {Object} token - The render command token with pre-parsed args
+	@returns {Object} Component node
+*/
+function build_render_node(token) {
+	const { args } = token;
+	
+	// Extract path value
+	let path = '';
+	if (args.path.type === VALUE_TYPE_STATIC) {
+		path = args.path.data;
+	} else if (args.path.type === VALUE_TYPE_FIELD) {
+		// If path is a variable, we can't determine the component name at parse time
+		// For now, just use the variable name as component name
+		path = args.path.data;
+	} else {
+		error('Invalid path type in render command', token);
+	}
+	
+	// Extract component name from path (only use last part after splitting by '/')
+	const component_name = path.split('/').pop();
+	if (!component_name) error('Invalid component path in render command', token);
+	
+	// Format component name to PascalCase (kebab-case to PascalCase)
+	// e.g., 'user-card' -> 'UserCard', 'button' -> 'Button'
+	const component = (
+		component_name
+		.charAt(0).toUpperCase() +
+		component_name.slice(1)
+		.replace(/-([a-z])/g, (_, char) => char.toUpperCase())
+		.replace(/_([a-z])/g, (_, char) => char.toUpperCase())
+	);
+	
+	// Props are already parsed, just use them directly
+	const props = args.props;
+	
+	return {
+		type: NODE_TYPE_COMPONENT,
+		component,
+		props,
+		children: [],
 	};
 }
 
