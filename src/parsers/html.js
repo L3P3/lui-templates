@@ -97,10 +97,7 @@ class Tokenizer {
 
 		while (this.index < this.src.length) {
 			const char = this.char_current();
-			if (html_is_whitespace(char)) {
-				this.char_step();
-			}
-			else if (char === '<') {
+			if (char === '<') {
 				if (this.chars_match('<!--')) this.chars_consume_until('-->', 'HTML comment');
 				else if (this.chars_match('</')) {
 					const token = this.parse_html_end();
@@ -403,102 +400,74 @@ function build_children(tokens, index, tag_parent) {
 	};
 }
 
-function build_value(tokens) {
-	const values = tokens.map(token => ({
-		type: VALUE_TYPE_STATIC,
-		data: token.value,
-	}));
-	
-	return (
-		values.length === 1
-		?	values[0]
-		:	{
-			type: VALUE_TYPE_STATIC,
-			data: values.map(v => v.data).join(''),
-		}
-	);
-}
-
 function build_text_value(tokens, is_mixed_content, is_first, is_last) {
-	const filtered = [];
-
-	let empty = true;
+	// Collect all text values
+	const text_tokens = [];
 	for (const token of tokens) {
 		if (token.type === TOKEN_TEXT) {
-			filtered.push({...token});
-			if (token.value.trim()) {
-				empty = false;
-			}
+			text_tokens.push(token);
 		}
 	}
 	
-	if (empty) {
+	if (text_tokens.length === 0) {
 		return null;
 	}
 
-	// Trim start if it's the first node or not mixed content
-	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT && (!is_mixed_content || is_first)) {
-		const trimmed = filtered[0].value.trimStart();
-		if (trimmed) filtered[0].value = trimmed;
-		else {
-			filtered.shift();
-			if (filtered.length === 0) return null;
+	// Combine all text
+	const combined = text_tokens.map(t => t.value).join('');
+	const trimmed = combined.trim();
+	
+	if (!trimmed) {
+		return null;
+	}
+
+	// Check if original had leading/trailing whitespace
+	const had_leading_ws = combined !== combined.trimStart();
+	const had_trailing_ws = combined !== combined.trimEnd();
+	
+	let result = trimmed;
+	
+	// For mixed content:
+	// - Add leading space if had whitespace and is preceded by another node (not first)
+	// - Add trailing space if had whitespace and is followed by another node (not last)
+	if (is_mixed_content) {
+		if (had_leading_ws && !is_first) {
+			result = ' ' + result;
+		}
+		if (had_trailing_ws && !is_last) {
+			result = result + ' ';
 		}
 	}
 	
-	// Trim end if it's the last node or not mixed content
-	if (filtered.length > 0 && (!is_mixed_content || is_last)) {
-		const last = filtered[filtered.length - 1];
-		if (last.type === TOKEN_TEXT) {
-			const trimmed = last.value.trimEnd();
-			if (trimmed) last.value = trimmed;
-			else {
-				filtered.pop();
-				if (filtered.length === 0) return null;
-			}
-		}
-	}
-
-	return build_value(filtered);
+	return {
+		type: VALUE_TYPE_STATIC,
+		data: result,
+	};
 }
 
 function build_value_trimmed(tokens) {
-	const filtered = [];
-
-	let empty = true;
+	// Collect all text values
+	const text_tokens = [];
 	for (const token of tokens) {
 		if (token.type === TOKEN_TEXT) {
-			filtered.push({...token});
-			if (token.value.trim()) {
-				empty = false;
-			}
+			text_tokens.push(token);
 		}
 	}
 	
-	if (empty) {
+	if (text_tokens.length === 0) {
 		return null;
 	}
 
-	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT) {
-		const trimmed = filtered[0].value.trimStart();
-		if (trimmed) filtered[0].value = trimmed;
-		else {
-			filtered.shift();
-			if (filtered.length === 0) return null;
-		}
+	// Combine and trim
+	const combined = text_tokens.map(t => t.value).join('');
+	const trimmed = combined.trim();
+	
+	if (!trimmed) {
+		return null;
 	}
 	
-	if (filtered.length > 0) {
-		const last = filtered[filtered.length - 1];
-		if (last.type === TOKEN_TEXT) {
-			const trimmed = last.value.trimEnd();
-			if (trimmed) last.value = trimmed;
-			else {
-				filtered.pop();
-				if (filtered.length === 0) return null;
-			}
-		}
-	}
-
-	return build_value(filtered);
+	return {
+		type: VALUE_TYPE_STATIC,
+		data: trimmed,
+	};
 }
