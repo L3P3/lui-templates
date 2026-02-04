@@ -7,6 +7,7 @@ import {
 	html_is_whitespace,
 	html_attr_to_dom,
 	html_whitespaces,
+	html_unescape,
 } from '../parser.js';
 
 const TOKEN_HTML_START = 0;
@@ -325,6 +326,9 @@ function build_nodes(tokens, index, index_end) {
 			else if (value !== value_trimmed_end) {
 				value = value_trimmed_end + ' ';
 			}
+
+			// Unescape HTML entities
+			value = html_unescape(value);
 
 			nodes.push({
 				is_wrapper: true,
