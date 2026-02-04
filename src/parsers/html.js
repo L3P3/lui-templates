@@ -96,22 +96,25 @@ class Tokenizer {
 		const tokens = [];
 
 		while (this.index < this.src.length) {
-			let token = null;
-
 			const char = this.char_current();
 			if (html_is_whitespace(char)) {
 				this.char_step();
 			}
 			else if (char === '<') {
 				if (this.chars_match('<!--')) this.chars_consume_until('-->', 'HTML comment');
-				else if (this.chars_match('</')) token = this.parse_html_end();
-				else token = this.parse_html_start();
+				else if (this.chars_match('</')) {
+					const token = this.parse_html_end();
+					if (token !== null) tokens.push(token);
+				}
+				else {
+					const result = this.parse_html_start();
+					tokens.push(...result);
+				}
 			}
 			else {
-				token = this.parse_text();
+				const token = this.parse_text();
+				if (token !== null) tokens.push(token);
 			}
-
-			if (token !== null) tokens.push(token);
 		}
 
 		return tokens;
@@ -123,20 +126,33 @@ class Tokenizer {
 		const tag_name = this.parse_tag_name();
 		const attributes = this.parse_attributes();
 		
-		// Skip self-closing slash if present
+		// Check for self-closing slash
 		this.chars_skip_whitespace();
-		if (this.char_current() === '/') {
+		const has_self_closing_slash = this.char_current() === '/';
+		if (has_self_closing_slash) {
 			this.char_step();
 		}
 		
 		this.chars_consume('>');
 
-		return {
+		const start_token = {
 			type: TOKEN_HTML_START,
 			...position,
 			tag_name,
 			attributes,
 		};
+
+		// If it has a self-closing slash and is NOT already a self-closing tag,
+		// return both start and end tokens to mark it as self-closing
+		if (has_self_closing_slash && !html_is_self_closing(tag_name)) {
+			return [start_token, {
+				type: TOKEN_HTML_END,
+				...position,
+				tag_name,
+			}];
+		}
+
+		return [start_token];
 	}
 
 	parse_html_end() {
@@ -180,7 +196,7 @@ class Tokenizer {
 	}
 
 	parse_attributes() {
-		const attributes = [];
+		const attributes = {};
 
 		while (this.index < this.src.length) {
 			while (html_is_whitespace(this.char_current())) {
@@ -189,8 +205,6 @@ class Tokenizer {
 
 			const char = this.char_current();
 			if (char === '>' || char === '/') break;
-
-			const position = this.position_get();
 
 			let name = '';
 			while (this.index < this.src.length) {
@@ -206,7 +220,7 @@ class Tokenizer {
 				this.char_step();
 			}
 
-			let value_tokens = null;
+			let value = null;
 			if (this.char_current() === '=') {
 				this.char_step();
 
@@ -217,70 +231,49 @@ class Tokenizer {
 				const quote = this.char_current();
 				if (quote === '"' || quote === "'") {
 					this.char_step();
-					value_tokens = this.parse_attribute_value(quote);
+					let text = '';
+					while (this.index < this.src.length) {
+						const c = this.char_current();
+						if (c === quote) break;
+						text += c;
+						this.char_step();
+					}
 					this.chars_consume(quote);
+					value = text;
 				}
 				else {
-					value_tokens = [];
 					let text = '';
-					const text_position = this.position_get();
-
 					while (this.index < this.src.length) {
 						const c = this.char_current();
 						if (html_is_whitespace(c) || c === '>' || c === '/') break;
 						text += c;
 						this.char_step();
 					}
-
-					if (text) {
-						value_tokens.push({
-							type: TOKEN_TEXT,
-							...text_position,
-							value: text,
-						});
-					}
+					value = text;
 				}
 			}
 
-			attributes.push({
-				type: TOKEN_ATTRIBUTE,
-				...position,
-				name: html_attr_to_dom(name),
-				value: value_tokens,
-			});
+			attributes[html_attr_to_dom(name)] = value;
 		}
 
 		return attributes;
-	}
-
-	parse_attribute_value(quote) {
-		const tokens = [];
-		let text = '';
-		let text_position = this.position_get();
-
-		while (this.index < this.src.length) {
-			const char = this.char_current();
-
-			if (char === quote) break;
-
-			text += char;
-			this.char_step();
-		}
-
-		if (text) {
-			tokens.push({
-				type: TOKEN_TEXT,
-				...text_position,
-				value: text,
-			});
-		}
-
-		return tokens.length === 0 ? null : tokens;
 	}
 }
 
 function build_nodes(tokens, index, index_end) {
 	const nodes = [];
+	
+	// Check if we have mixed content (both text and elements)
+	let has_text = false;
+	let has_elements = false;
+	for (let i = index; i < index_end; i++) {
+		if (tokens[i].type === TOKEN_TEXT && tokens[i].value.trim()) {
+			has_text = true;
+		} else if (tokens[i].type === TOKEN_HTML_START) {
+			has_elements = true;
+		}
+	}
+	const is_mixed_content = has_text && has_elements;
 
 	while (index < index_end) {
 		const token = tokens[index];
@@ -302,7 +295,7 @@ function build_nodes(tokens, index, index_end) {
 				merge_list.push(token);
 			}
 
-			const innerText = build_value_trimmed(merge_list);
+			const innerText = build_text_value(merge_list, is_mixed_content, nodes.length === 0, index >= index_end);
 			if (innerText) {
 				nodes.push({
 					type: NODE_TYPE_ELEMENT,
@@ -328,14 +321,12 @@ function build_element_node(tokens, index) {
 
 	const props = {};
 	if (token_start.attributes) {
-		for (const token of token_start.attributes) {
-			if (token.type === TOKEN_ATTRIBUTE) {
-				props[token.name] = (
-					token.value === null
-					?	{type: VALUE_TYPE_STATIC, data: true}
-					:	build_value(token.value)
-				);
-			}
+		for (const [name, value] of Object.entries(token_start.attributes)) {
+			props[name] = (
+				value === null
+				?	{type: VALUE_TYPE_STATIC, data: true}
+				:	{type: VALUE_TYPE_STATIC, data: value}
+			);
 		}
 	}
 
@@ -403,8 +394,11 @@ function build_children(tokens, index, tag_parent) {
 		error(`Unclosed tag <${tag_parent}>`, tokens[index - 1] || tokens[0]);
 	}
 
+	// Check if content is text-only (no HTML elements)
+	const has_elements = content.some(t => t.type === TOKEN_HTML_START);
+	
 	return {
-		children: build_nodes(content, 0, content.length),
+		children: has_elements ? build_nodes(content, 0, content.length) : [],
 		index,
 	};
 }
@@ -425,13 +419,56 @@ function build_value(tokens) {
 	);
 }
 
+function build_text_value(tokens, is_mixed_content, is_first, is_last) {
+	const filtered = [];
+
+	let empty = true;
+	for (const token of tokens) {
+		if (token.type === TOKEN_TEXT) {
+			filtered.push({...token});
+			if (token.value.trim()) {
+				empty = false;
+			}
+		}
+	}
+	
+	if (empty) {
+		return null;
+	}
+
+	// Trim start if it's the first node or not mixed content
+	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT && (!is_mixed_content || is_first)) {
+		const trimmed = filtered[0].value.trimStart();
+		if (trimmed) filtered[0].value = trimmed;
+		else {
+			filtered.shift();
+			if (filtered.length === 0) return null;
+		}
+	}
+	
+	// Trim end if it's the last node or not mixed content
+	if (filtered.length > 0 && (!is_mixed_content || is_last)) {
+		const last = filtered[filtered.length - 1];
+		if (last.type === TOKEN_TEXT) {
+			const trimmed = last.value.trimEnd();
+			if (trimmed) last.value = trimmed;
+			else {
+				filtered.pop();
+				if (filtered.length === 0) return null;
+			}
+		}
+	}
+
+	return build_value(filtered);
+}
+
 function build_value_trimmed(tokens) {
 	const filtered = [];
 
 	let empty = true;
 	for (const token of tokens) {
 		if (token.type === TOKEN_TEXT) {
-			filtered.push(token);
+			filtered.push({...token});
 			if (token.value.trim()) {
 				empty = false;
 			}

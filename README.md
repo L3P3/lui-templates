@@ -112,12 +112,8 @@ export default function Simple() {
 	hook_dom("div");
 
 	return [
-		node_dom("h1", null, [
-			node_dom("span[innerText=Hello World]"),
-		]),
-		node_dom("p", null, [
-			node_dom("span[innerText=This is a simple HTML test.]"),
-		]),
+		node_dom("h1[innerText=Hello World]"),
+		node_dom("p[innerText=This is a simple HTML test.]"),
 	];
 }
 ```
