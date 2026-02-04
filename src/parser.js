@@ -47,7 +47,7 @@ export function html_attr_to_dom(attr) {
 	return html_attr_to_dom_map.get(attr) || attr;
 }
 
-const html_whitespaces = ' \n\r\t\f\v'.split('');
+export const html_whitespaces = ' \n\r\t\f\v'.split('');
 export const html_is_whitespace = char => html_whitespaces.includes(char);
 
 const html_self_closing = 'img,input,br,hr'.split(',');
