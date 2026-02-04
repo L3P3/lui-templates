@@ -327,9 +327,6 @@ function build_nodes(tokens, index, index_end) {
 				value = value_trimmed_end + ' ';
 			}
 
-			// Unescape HTML entities
-			value = html_unescape(value);
-
 			nodes.push({
 				is_wrapper: true,
 				type: NODE_TYPE_ELEMENT,
@@ -337,7 +334,7 @@ function build_nodes(tokens, index, index_end) {
 				props: {
 					innerText: {
 						type: VALUE_TYPE_STATIC,
-						data: value,
+						data: html_unescape(value),
 					},
 				},
 				children: [],
