@@ -442,7 +442,7 @@ function build_value_trimmed(tokens) {
 		return null;
 	}
 
-	if (filtered[0].type === TOKEN_TEXT) {
+	if (filtered.length > 0 && filtered[0].type === TOKEN_TEXT) {
 		const trimmed = filtered[0].value.trimStart();
 		if (trimmed) filtered[0].value = trimmed;
 		else {
@@ -451,13 +451,15 @@ function build_value_trimmed(tokens) {
 		}
 	}
 	
-	const last = filtered[filtered.length - 1];
-	if (last.type === TOKEN_TEXT) {
-		const trimmed = last.value.trimEnd();
-		if (trimmed) last.value = trimmed;
-		else {
-			filtered.pop();
-			if (filtered.length === 0) return null;
+	if (filtered.length > 0) {
+		const last = filtered[filtered.length - 1];
+		if (last.type === TOKEN_TEXT) {
+			const trimmed = last.value.trimEnd();
+			if (trimmed) last.value = trimmed;
+			else {
+				filtered.pop();
+				if (filtered.length === 0) return null;
+			}
 		}
 	}
 
