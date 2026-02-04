@@ -175,14 +175,17 @@ const html_entity_map = new Map([
  * @returns {string} The unescaped string
  */
 export function html_unescape(str) {
-	return str.replace(/&([a-zA-Z0-9]+|#[0-9]+|#x[0-9a-fA-F]+);/g, (match, entity) => {
-		// Handle numeric entities (decimal)
+	return str.replace(/&([a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#x[0-9a-fA-F]+);/g, (match, entity) => {
+		// Handle numeric entities (hexadecimal)
 		if (entity.startsWith('#x') || entity.startsWith('#X')) {
 			const codePoint = parseInt(entity.slice(2), 16);
+			if (isNaN(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) return match;
 			return String.fromCodePoint(codePoint);
 		}
+		// Handle numeric entities (decimal)
 		if (entity.startsWith('#')) {
 			const codePoint = parseInt(entity.slice(1), 10);
+			if (isNaN(codePoint) || codePoint < 0 || codePoint > 0x10FFFF) return match;
 			return String.fromCodePoint(codePoint);
 		}
 		// Handle named entities
