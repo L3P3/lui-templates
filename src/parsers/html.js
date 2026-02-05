@@ -3,14 +3,15 @@ import {
 	VALUE_TYPE_STATIC,
 } from '../constants.js';
 import {
+	html_attr_to_dom,
 	html_is_self_closing,
 	html_is_whitespace,
-	html_attr_to_dom,
+	html_unescape,
 	html_whitespaces,
 } from '../parser.js';
 
-const TOKEN_HTML_START = 0;
-const TOKEN_HTML_END = 1;
+const TOKEN_TAG_START = 0;
+const TOKEN_TAG_END = 1;
 const TOKEN_TEXT = 2;
 
 export default async function parse_html(src, path) {
@@ -140,7 +141,7 @@ class Tokenizer {
 				this.chars_consume('>');
 
 				tokens.push({
-					type: TOKEN_HTML_END,
+					type: TOKEN_TAG_END,
 					...position,
 					tag_name,
 				});
@@ -175,7 +176,7 @@ class Tokenizer {
 		this.chars_consume('>');
 
 		const start_token = {
-			type: TOKEN_HTML_START,
+			type: TOKEN_TAG_START,
 			...position,
 			tag_name,
 			props,
@@ -188,7 +189,7 @@ class Tokenizer {
 			return [
 				start_token,
 				{
-					type: TOKEN_HTML_END,
+					type: TOKEN_TAG_END,
 					...position,
 					tag_name,
 				}
@@ -250,7 +251,7 @@ function build_nodes(tokens, index, index_end) {
 	for (; index < index_end; index++) {
 		const token = tokens[index];
 		switch (token.type) {
-		case TOKEN_HTML_START: {
+		case TOKEN_TAG_START: {
 			const {tag_name, props} = token;
 			const index_start = ++index;
 
@@ -259,10 +260,10 @@ function build_nodes(tokens, index, index_end) {
 			loop: for (; index < index_end; index++) {
 				const token = tokens[index];
 				switch (token.type) {
-				case TOKEN_HTML_START:
+				case TOKEN_TAG_START:
 					if (token.tag_name === tag_name) depth++;
 					break;
-				case TOKEN_HTML_END:
+				case TOKEN_TAG_END:
 					if (
 						token.tag_name === tag_name &&
 						--depth === 0
@@ -291,7 +292,7 @@ function build_nodes(tokens, index, index_end) {
 			});
 			break;
 		}
-		case TOKEN_HTML_END:
+		case TOKEN_TAG_END:
 			error(`Unexpected closing tag </${token.tag_name}>`, token);
 		case TOKEN_TEXT: {
 			let {value} = token;
@@ -333,7 +334,7 @@ function build_nodes(tokens, index, index_end) {
 				props: {
 					innerText: {
 						type: VALUE_TYPE_STATIC,
-						data: value,
+						data: html_unescape(value),
 					},
 				},
 				children: [],
