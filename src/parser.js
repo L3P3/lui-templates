@@ -168,30 +168,24 @@ const html_entity_map = new Map([
 	['frac34', '¾'],
 ]);
 
-/**
- * Unescapes HTML entities in a string
- * Supports named entities (e.g., &lt;, &amp;, &auml;) and numeric entities (e.g., &#60;, &#x3C;)
- * @param {string} str - The HTML string to unescape
- * @returns {string} The unescaped string
- */
-export function html_unescape(str) {
-	const isValidCodePoint = (codePoint) => 
-		!isNaN(codePoint) && codePoint >= 0 && codePoint <= 0x10FFFF;
-
-	return str.replace(/&([a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);/g, (match, entity) => {
-		// Handle numeric entities (hexadecimal)
-		if (entity.startsWith('#x') || entity.startsWith('#X')) {
-			const codePoint = parseInt(entity.slice(2), 16);
-			if (!isValidCodePoint(codePoint)) return match;
+function html_entity_translate(match, entity) {
+	if (entity[0] === '#') {
+		const codePoint = (
+			entity[1].toLowerCase() === 'x'
+			?	parseInt(entity.slice(2), 16)
+			:	parseInt(entity.slice(1), 10)
+		);
+		if (
+			codePoint >= 0 && codePoint < 0x110000 &&
+			(codePoint < 0xD800 || codePoint >= 0xE000)
+		) {
 			return String.fromCodePoint(codePoint);
 		}
-		// Handle numeric entities (decimal)
-		if (entity.startsWith('#')) {
-			const codePoint = parseInt(entity.slice(1), 10);
-			if (!isValidCodePoint(codePoint)) return match;
-			return String.fromCodePoint(codePoint);
-		}
-		// Handle named entities
-		return html_entity_map.get(entity) || match;
-	});
+	}
+	return html_entity_map.get(entity) || match;
 }
+
+export const html_unescape = text => text.replace(
+	/&([a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#[xX][0-9a-fA-F]+);/g,
+	html_entity_translate
+);
