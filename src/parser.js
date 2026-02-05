@@ -56,7 +56,6 @@ export const html_is_self_closing = tag => html_self_closing.includes(tag);
 const html_boolean_attrs = new Set('disabled,checked,selected,readonly,required,autofocus,autoplay,controls,loop,muted,open,hidden,multiple,defer,async,novalidate,formnovalidate'.split(','));
 export const html_is_boolean_attr = attr => html_boolean_attrs.has(attr.toLowerCase());
 
-// Map of HTML entities to their corresponding characters
 const html_entity_map = new Map([
 	// Common punctuation and symbols
 	['lt', '<'],
